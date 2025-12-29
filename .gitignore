@@ -1,0 +1,37 @@
+
+# --- OS / Editor ---
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+.vscode/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# --- Project artifacts ---
+.security_reports/
+security_audit.json
+
+# Secrets (keep local)
+.env
+
+# Logs
+*.log
