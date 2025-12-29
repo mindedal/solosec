@@ -67,6 +67,13 @@ solosec
 solosec -Url http://localhost:3000
 ```
 
+On macOS/Linux (bash/zsh):
+
+```bash
+# Scan code + run DAST
+solosec --url "http://localhost:3000"
+```
+
 ---
 
 ## CI/CD (GitHub Actions)

@@ -37,11 +37,15 @@ runs:
 
         if [ -n "$URL" ]; then
           docker run --rm \
+            -e "SOLOSEC_HOST_WORKSPACE=${GITHUB_WORKSPACE}" \
+            -e "SOLOSEC_HOST_REPORT_DIR=${GITHUB_WORKSPACE}/.security_reports" \
             -v "${GITHUB_WORKSPACE}:/src" \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            solosec:action -u "$URL"
+            solosec:action --url "$URL"
         else
           docker run --rm \
+            -e "SOLOSEC_HOST_WORKSPACE=${GITHUB_WORKSPACE}" \
+            -e "SOLOSEC_HOST_REPORT_DIR=${GITHUB_WORKSPACE}/.security_reports" \
             -v "${GITHUB_WORKSPACE}:/src" \
             solosec:action
         fi

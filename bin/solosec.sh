@@ -6,14 +6,45 @@
 # Usage:
 #   solosec                                  (Code scan only)
 #   solosec -u "http://localhost:3000"       (Code + DAST scan)
+#   solosec --url "http://localhost:3000"    (Code + DAST scan)
 #
 
 # --- Parse Arguments ---
+# Accept both short and long flags for compatibility:
+#   -u <url>
+#   --url <url>
+#   -Url <url>   (PowerShell-style; tolerated for convenience)
 URL=""
-while getopts "u:" opt; do
-    case $opt in
-        u) URL="$OPTARG" ;;
-        *) echo "Usage: $0 [-u <target_url>]"; exit 1 ;;
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -u|--url|-Url|--Url)
+            if [ $# -lt 2 ]; then
+                echo "Missing value for $1" >&2
+                echo "Usage: $0 [-u|--url <target_url>]" >&2
+                exit 2
+            fi
+            URL="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-u|--url <target_url>]";
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            echo "Usage: $0 [-u|--url <target_url>]" >&2
+            exit 2
+            ;;
+        *)
+            # No positional args supported today.
+            echo "Unexpected argument: $1" >&2
+            echo "Usage: $0 [-u|--url <target_url>]" >&2
+            exit 2
+            ;;
     esac
 done
 
@@ -152,7 +183,16 @@ if [ "$SOLOSEC_TOOL_ZAP" = "1" ] && [ -n "$URL" ]; then
     echo -e "      ${GRAY}Targeting: $ZAP_TARGET${NC}"
 
     # Run ZAP Container
-    if docker run --rm -v "$REPORT_DIR:/zap/wrk/:rw" -t ghcr.io/zaproxy/zaproxy:stable \
+    # IMPORTANT (CI): When SoloSec runs in a container but talks to the host Docker daemon
+    # (via /var/run/docker.sock), the volume source path must be a HOST path, not a container-only path.
+    ZAP_WORKDIR_HOST="$REPORT_DIR"
+    if [ -n "${SOLOSEC_HOST_REPORT_DIR:-}" ]; then
+        ZAP_WORKDIR_HOST="$SOLOSEC_HOST_REPORT_DIR"
+    elif [ -n "${SOLOSEC_HOST_WORKSPACE:-}" ]; then
+        ZAP_WORKDIR_HOST="$SOLOSEC_HOST_WORKSPACE/.security_reports"
+    fi
+
+    if docker run --rm -v "$ZAP_WORKDIR_HOST:/zap/wrk/:rw" -t ghcr.io/zaproxy/zaproxy:stable \
         zap-full-scan.py -t "$ZAP_TARGET" -J "zap.json" -r "zap.html" -I; then
         echo -e "   ${GREEN}-> Done.${NC}"
     fi
