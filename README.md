@@ -18,7 +18,7 @@ Automated DevSecOps wrapper for Windows, macOS, and Linux. Runs industry-standar
 ### PowerShell
 
 ```powershell
-git clone https://github.com/YOUR_USERNAME/solosec.git
+git clone https://github.com/mindedal/solosec.git
 cd solosec
 .\install.ps1
 ```
@@ -92,3 +92,9 @@ tools:
 - `target_url` enables OWASP ZAP DAST (unless `tools.zap: false`).
 - `exclude_dirs` is applied to Trivy (`--skip-dirs`), Semgrep (`--exclude`), and Gitleaks (`--exclude-path`).
 - CLI flags override config (e.g., `solosec -Url ...` wins over `target_url`).
+
+---
+
+## License
+
+MIT License — see `LICENSE`.
