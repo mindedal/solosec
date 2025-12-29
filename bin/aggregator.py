@@ -78,9 +78,12 @@ def print_human_summary(
     *,
     findings: List[Dict[str, Any]],
     output_file: str,
-    fail_on_critical: bool = True,
+    fail_on_severities: Optional[List[str]] = None,
 ) -> bool:
-    """Print a human summary. Returns True if scan should be considered failed."""
+    """Print a human summary.
+
+    Returns True if the scan should be considered failed.
+    """
     summary = _compute_human_summary(findings)
     counts: Dict[str, int] = summary["counts"]
     breakdown: Dict[str, Dict[str, int]] = summary["breakdown"]
@@ -89,7 +92,11 @@ def print_human_summary(
     high = counts.get("HIGH", 0)
     medium = counts.get("MEDIUM", 0)
 
-    failed = bool(critical) if fail_on_critical else False
+    if fail_on_severities is None:
+        # CI default: fail the build if any HIGH or CRITICAL issues exist.
+        fail_on_severities = ["CRITICAL", "HIGH"]
+    fail_set = {_normalize_severity(s) for s in fail_on_severities}
+    failed = any((counts.get(sev, 0) or 0) > 0 for sev in fail_set)
 
     # Prefer rich if available; fall back to plain text.
     try:
@@ -107,7 +114,9 @@ def print_human_summary(
         table.add_column("Count", justify="right")
         table.add_column("Breakdown", justify="left")
 
-        def add_row(label: str, sev: str, color: str, show_breakdown: bool = False) -> None:
+        def add_row(
+            label: str, sev: str, color: str, show_breakdown: bool = False
+        ) -> None:
             bd = ""
             if show_breakdown:
                 bd = _format_breakdown(
@@ -123,9 +132,13 @@ def print_human_summary(
         console.print(table)
         console.print("" + ("-" * 50))
         if failed:
-            console.print(f"[red]FAIL:[/red] Critical issues found. See {output_file}")
+            console.print(
+                f"[red]FAIL:[/red] High/Critical issues found. See {output_file}"
+            )
         else:
-            console.print(f"[green]PASS:[/green] No critical issues found. See {output_file}")
+            console.print(
+                f"[green]PASS:[/green] No High/Critical issues found. See {output_file}"
+            )
     except Exception:
         # ANSI color codes for plain text fallback
         RED = "\033[91m"
@@ -133,21 +146,29 @@ def print_human_summary(
         GREEN = "\033[92m"
         CYAN = "\033[96m"
         RESET = "\033[0m"
-        
+
         line = "-" * 50
         print(line)
         print(f"{CYAN}SCAN COMPLETE{RESET}")
         print(line)
-        crit_bd = _format_breakdown(breakdown.get("CRITICAL", {}), ["Secrets", "Code", "Deps", "ZAP"])
-        high_bd = _format_breakdown(breakdown.get("HIGH", {}), ["Secrets", "Code", "Deps", "ZAP"])
-        print(f"{RED}Critical:{RESET} {critical}" + (f"   ({crit_bd})" if crit_bd else ""))
+        crit_bd = _format_breakdown(
+            breakdown.get("CRITICAL", {}), ["Secrets", "Code", "Deps", "ZAP"]
+        )
+        high_bd = _format_breakdown(
+            breakdown.get("HIGH", {}), ["Secrets", "Code", "Deps", "ZAP"]
+        )
+        print(
+            f"{RED}Critical:{RESET} {critical}" + (f"   ({crit_bd})" if crit_bd else "")
+        )
         print(f"{RED}High:{RESET}     {high}" + (f"   ({high_bd})" if high_bd else ""))
         print(f"{YELLOW}Medium:{RESET}   {medium}")
         print(line)
         if failed:
-            print(f"{RED}FAIL:{RESET} Critical issues found. See {output_file}")
+            print(f"{RED}FAIL:{RESET} High/Critical issues found. See {output_file}")
         else:
-            print(f"{GREEN}PASS:{RESET} No critical issues found. See {output_file}")
+            print(
+                f"{GREEN}PASS:{RESET} No High/Critical issues found. See {output_file}"
+            )
 
     return failed
 

@@ -1,0 +1,27 @@
+name: SoloSec
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Optional DAST target URL (runs OWASP ZAP if set)
+        required: false
+        default: ""
+
+jobs:
+  solosec:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: SoloSec scan
+        uses: ./
+        with:
+          url: ${{ inputs.url }}

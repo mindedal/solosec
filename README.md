@@ -69,6 +69,44 @@ solosec -Url http://localhost:3000
 
 ---
 
+## CI/CD (GitHub Actions)
+
+GitHub Actions (and most CI systems) decide whether a job is **Pass (green)** or **Fail (red)** based on the **process exit code**:
+
+- Exit code `0` → pass
+- Exit code `!= 0` → fail
+
+SoloSec is designed to have “teeth” in CI:
+
+- The aggregator exits **non-zero** if it finds any **HIGH** or **CRITICAL** issues.
+- The `solosec` runner scripts propagate that exit code to the shell.
+
+This repo includes a ready-to-use workflow at `.github/workflows/solosec.yml` that:
+
+1. Builds the included `Dockerfile` (so Trivy/Semgrep/Gitleaks are available)
+2. Runs `solosec` against your repository
+3. Uploads `security_audit.json` and `.security_reports/` as build artifacts
+
+If you want to run ZAP (DAST) in CI, trigger the workflow manually and pass the `url` input.
+
+### Use SoloSec from other repositories
+
+This repo also ships as a reusable GitHub Action (composite action). In another repository, add a workflow step like:
+
+```yaml
+- name: SoloSec scan
+  uses: mindedal/solosec@v1
+  with:
+    # Optional: enables OWASP ZAP (requires docker socket access)
+    # url: http://host.docker.internal:3000
+    upload-artifact: true
+    artifact-name: solosec-report
+```
+
+**Important:** for stable usage, create a tag/release like `v1` in this repo and update it when you publish compatible changes.
+
+---
+
 ## Config File (.solosec.yaml)
 
 You can configure SoloSec per-repository by adding a `.solosec.yaml` file at the project root.

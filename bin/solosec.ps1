@@ -152,3 +152,5 @@ if ($aggExit -ne 0) {
 
 Write-Host "`nAUDIT COMPLETE!" -ForegroundColor Magenta
 Write-Host "Report saved to: $FinalReport"
+
+exit 0

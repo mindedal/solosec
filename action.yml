@@ -1,0 +1,57 @@
+name: SoloSec Security Scan
+description: Run SoloSec (Trivy + Semgrep + Gitleaks + optional ZAP) against the repository and fail CI on HIGH/CRITICAL findings.
+
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  url:
+    description: "Optional DAST target URL (enables OWASP ZAP). Example: http://host.docker.internal:3000"
+    required: false
+    default: ""
+  upload-artifact:
+    description: Upload security reports as a workflow artifact (security_audit.json and .security_reports/)
+    required: false
+    default: "true"
+  artifact-name:
+    description: Artifact name when upload-artifact is true
+    required: false
+    default: solosec-report
+
+runs:
+  using: composite
+  steps:
+    - name: Build SoloSec image
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker build -t solosec:action "${GITHUB_ACTION_PATH}"
+
+    - name: Run SoloSec
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        URL="${{ inputs.url }}"
+
+        if [ -n "$URL" ]; then
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/src" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            solosec:action -u "$URL"
+        else
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/src" \
+            solosec:action
+        fi
+
+    - name: Upload reports (always)
+      if: ${{ always() && inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        if-no-files-found: ignore
+        path: |
+          security_audit.json
+          .security_reports/**
