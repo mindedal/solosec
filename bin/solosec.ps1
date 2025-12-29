@@ -89,7 +89,7 @@ if ($ToolSemgrep) {
     foreach ($d in $ExcludeDirs) {
         if ($d) { $semgrepArgs += @("--exclude", "$d") }
     }
-    semgrep @semgrepArgs
+    semgrep @semgrepArgs 2>$null
     if ($?) { 
         (Get-Content "$ReportDir\semgrep.json" -Raw) | 
             ConvertFrom-Json | 
@@ -110,7 +110,7 @@ if ($ToolGitleaks) {
     foreach ($d in $ExcludeDirs) {
         if ($d) { $gitleaksArgs += @("--exclude-path", "$d") }
     }
-    gitleaks @gitleaksArgs
+    gitleaks @gitleaksArgs 2>$null
     Write-Host "   -> Done." -ForegroundColor Green
 } else {
     Write-Host "[3/4] Skipping Gitleaks (Disabled in .solosec.yaml)." -ForegroundColor DarkGray

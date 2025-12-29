@@ -98,7 +98,7 @@ if [ "$SOLOSEC_TOOL_SEMGREP" = "1" ]; then
         done
     fi
 
-    if semgrep "${SEMGREP_ARGS[@]}"; then
+    if semgrep "${SEMGREP_ARGS[@]}" 2>/dev/null; then
         # Beautify JSON using Python (cross-platform)
         python3 -c "
 import json
@@ -132,7 +132,7 @@ if [ "$SOLOSEC_TOOL_GITLEAKS" = "1" ]; then
             fi
         done
     fi
-    gitleaks "${GITLEAKS_ARGS[@]}"
+    gitleaks "${GITLEAKS_ARGS[@]}" 2>/dev/null
     echo -e "   ${GREEN}-> Done.${NC}"
 else
     echo -e "${GRAY}[3/4] Skipping Gitleaks (Disabled in .solosec.yaml).${NC}"
