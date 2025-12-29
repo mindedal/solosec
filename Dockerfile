@@ -37,7 +37,7 @@ RUN python -m pip install --upgrade pip \
  && python -m pip install semgrep rich
 
 # Gitleaks
-RUN set -euo pipefail; \
+RUN set -eu; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
       amd64) gl_arch="linux_x64" ;; \
@@ -47,8 +47,10 @@ RUN set -euo pipefail; \
     if [ -z "${GITLEAKS_VERSION}" ]; then \
       GITLEAKS_VERSION="$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep '"tag_name"' | head -n 1 | sed -E 's/.*"v?([^\"]+)\".*/\1/')"; \
     fi; \
-    curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${gl_arch}.tar.gz" \
-      | tar -xz -C /usr/local/bin gitleaks; \
+    url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${gl_arch}.tar.gz"; \
+    curl -sSL "$url" -o /tmp/gitleaks.tgz; \
+    tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks; \
+    rm -f /tmp/gitleaks.tgz; \
     chmod +x /usr/local/bin/gitleaks
 
 # Copy SoloSec scripts into the image
