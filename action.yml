@@ -1,61 +1,44 @@
 name: SoloSec Security Scan
-description: Run SoloSec (Trivy + Semgrep + Gitleaks + optional ZAP) against the repository and fail CI on HIGH/CRITICAL findings.
-
-branding:
-  icon: shield
-  color: red
+description: Run SoloSec (Trivy + Semgrep + Gitleaks + optional ZAP).
 
 inputs:
   url:
-    description: "Optional DAST target URL (enables OWASP ZAP). Example: http://host.docker.internal:3000"
+    description: "Optional DAST target URL"
     required: false
-    default: ""
   upload-artifact:
-    description: Upload security reports as a workflow artifact (security_audit.json and .security_reports/)
-    required: false
+    description: "Upload reports"
     default: "true"
   artifact-name:
-    description: Artifact name when upload-artifact is true
-    required: false
-    default: solosec-report
+    description: "Artifact name"
+    default: "solosec-report"
 
 runs:
   using: composite
   steps:
-    - name: Build SoloSec image
+    - name: Build SoloSec
       shell: bash
-      run: |
-        set -euo pipefail
-        docker build -t solosec:action "${GITHUB_ACTION_PATH}"
+      run: docker build -t solosec:action "${GITHUB_ACTION_PATH}"
 
     - name: Run SoloSec
       shell: bash
+      env:
+        INPUT_URL: ${{ inputs.url }}
       run: |
-        set -euo pipefail
+        URL="$INPUT_URL"
+        ARGS=()
+        if [ -n "$URL" ]; then ARGS+=(--url "$URL"); fi
 
-        URL="${{ inputs.url }}"
+        docker run --rm \
+          -v "${GITHUB_WORKSPACE}:/src" \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -e GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+          solosec:action "${ARGS[@]}"
 
-        if [ -n "$URL" ]; then
-          docker run --rm \
-            -e "SOLOSEC_HOST_WORKSPACE=${GITHUB_WORKSPACE}" \
-            -e "SOLOSEC_HOST_REPORT_DIR=${GITHUB_WORKSPACE}/.security_reports" \
-            -v "${GITHUB_WORKSPACE}:/src" \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            solosec:action --url "$URL"
-        else
-          docker run --rm \
-            -e "SOLOSEC_HOST_WORKSPACE=${GITHUB_WORKSPACE}" \
-            -e "SOLOSEC_HOST_REPORT_DIR=${GITHUB_WORKSPACE}/.security_reports" \
-            -v "${GITHUB_WORKSPACE}:/src" \
-            solosec:action
-        fi
-
-    - name: Upload reports (always)
+    - name: Upload reports
       if: ${{ always() && inputs.upload-artifact == 'true' }}
       uses: actions/upload-artifact@v4
       with:
         name: ${{ inputs.artifact-name }}
-        if-no-files-found: ignore
         path: |
           security_audit.json
           .security_reports/**

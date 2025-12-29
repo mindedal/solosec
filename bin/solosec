@@ -2,5 +2,15 @@
 set -euo pipefail
 
 # Extensionless entrypoint so users can run: solosec
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# If this script is installed via symlink (common on Linux/Docker), resolve the
+# real directory so we can find solosec.sh reliably.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+	DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+	SOURCE="$(readlink "$SOURCE")"
+	[[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 exec "$SCRIPT_DIR/solosec.sh" "$@"
