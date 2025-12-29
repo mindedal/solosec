@@ -1,4 +1,4 @@
-# install.ps1 - The "One Click" Setup
+# install.ps1 - Setup script
 Write-Host "Installing SoloSec..." -ForegroundColor Cyan
 
 # 1. Check Prerequisites
@@ -16,8 +16,13 @@ Write-Host "[*] Checking dependency tools..."
 if (!(Get-Command trivy -ErrorAction SilentlyContinue)) {
     Write-Host "   -> Installing Trivy..."
     # Attempt Scoop first (cleanest), fall back to Choco
-    if (Get-Command scoop -ErrorAction SilentlyContinue) { scoop install trivy }
-    else { choco install trivy }
+    if (Get-Command scoop -ErrorAction SilentlyContinue) {
+        scoop install trivy
+    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+        choco install trivy -y
+    } else {
+        Write-Warning "Neither Scoop nor Chocolatey found. Please install Trivy manually: https://trivy.dev"
+    }
 }
 
 if (!(Get-Command semgrep -ErrorAction SilentlyContinue)) {
@@ -29,8 +34,13 @@ if (!(Get-Command semgrep -ErrorAction SilentlyContinue)) {
 
 if (!(Get-Command gitleaks -ErrorAction SilentlyContinue)) {
     Write-Host "   -> Installing Gitleaks..."
-    if (Get-Command scoop -ErrorAction SilentlyContinue) { scoop install gitleaks }
-    else { choco install gitleaks }
+    if (Get-Command scoop -ErrorAction SilentlyContinue) {
+        scoop install gitleaks
+    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+        choco install gitleaks -y
+    } else {
+        Write-Warning "Neither Scoop nor Chocolatey found. Please install Gitleaks manually: https://github.com/gitleaks/gitleaks"
+    }
 }
 
 # 3. Add to PATH (Permanently)

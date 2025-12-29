@@ -1,0 +1,18 @@
+.git
+**/.git
+
+# Local outputs
+.security_reports/
+**/.security_reports/
+security_audit.json
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
+# Editor junk
+.vscode/
+.idea/
+.DS_Store

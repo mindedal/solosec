@@ -6,6 +6,152 @@ from typing import Any, Dict, List, Optional, Union
 JsonValue = Union[Dict[str, Any], List[Any]]
 
 
+def _normalize_severity(sev: Any) -> str:
+    """Normalize severities across tools to a common set."""
+    try:
+        s = str(sev).strip().upper()
+    except (TypeError, AttributeError):
+        return "UNKNOWN"
+
+    # Common aliases / variants
+    if s in {"CRIT"}:
+        return "CRITICAL"
+    # Semgrep-style severities
+    if s in {"ERROR"}:
+        return "HIGH"
+    if s in {"WARN", "WARNING"}:
+        return "MEDIUM"
+    if s in {"INFORMATION", "INFORMATIONAL"}:
+        return "INFO"
+    if s in {""}:
+        return "UNKNOWN"
+
+    return s
+
+
+def _category_for_tool(tool: str) -> str:
+    """Human-friendly grouping for summary breakdown."""
+    t = (tool or "").strip().lower()
+    if t == "gitleaks":
+        return "Secrets"
+    if t == "semgrep":
+        return "Code"
+    if t == "trivy":
+        return "Deps"
+    if t == "zap":
+        return "ZAP"
+    return tool or "Other"
+
+
+def _compute_human_summary(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute counts used by the terminal summary."""
+    severities = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
+    counts: Dict[str, int] = {s: 0 for s in severities}
+    breakdown: Dict[str, Dict[str, int]] = {s: {} for s in severities}
+
+    for f in findings:
+        sev = _normalize_severity(f.get("severity", "UNKNOWN"))
+        if sev not in counts:
+            sev = "UNKNOWN"
+        counts[sev] += 1
+
+        category = _category_for_tool(str(f.get("tool", "Other")))
+        breakdown_for_sev = breakdown[sev]
+        breakdown_for_sev[category] = breakdown_for_sev.get(category, 0) + 1
+
+    return {
+        "counts": counts,
+        "breakdown": breakdown,
+        "total": len(findings),
+    }
+
+
+def _format_breakdown(items: Dict[str, int], order: Optional[List[str]] = None) -> str:
+    if not items:
+        return ""
+    keys = order or sorted(items.keys())
+    parts = [f"{k}: {items[k]}" for k in keys if items.get(k)]
+    return ", ".join(parts)
+
+
+def print_human_summary(
+    *,
+    findings: List[Dict[str, Any]],
+    output_file: str,
+    fail_on_critical: bool = True,
+) -> bool:
+    """Print a human summary. Returns True if scan should be considered failed."""
+    summary = _compute_human_summary(findings)
+    counts: Dict[str, int] = summary["counts"]
+    breakdown: Dict[str, Dict[str, int]] = summary["breakdown"]
+
+    critical = counts.get("CRITICAL", 0)
+    high = counts.get("HIGH", 0)
+    medium = counts.get("MEDIUM", 0)
+
+    failed = bool(critical) if fail_on_critical else False
+
+    # Prefer rich if available; fall back to plain text.
+    try:
+        from rich.console import Console  # type: ignore
+        from rich.table import Table  # type: ignore
+        from rich.text import Text  # type: ignore
+
+        console = Console()
+        console.print("" + ("-" * 50))
+        console.print(Text("SCAN COMPLETE", style="bold cyan"))
+        console.print("" + ("-" * 50))
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Severity", justify="left")
+        table.add_column("Count", justify="right")
+        table.add_column("Breakdown", justify="left")
+
+        def add_row(label: str, sev: str, color: str, show_breakdown: bool = False) -> None:
+            bd = ""
+            if show_breakdown:
+                bd = _format_breakdown(
+                    breakdown.get(sev, {}),
+                    order=["Secrets", "Code", "Deps", "ZAP"],
+                )
+            table.add_row(f"[{color}]{label}[/{color}]", str(counts.get(sev, 0)), bd)
+
+        add_row("Critical", "CRITICAL", "red", show_breakdown=True)
+        add_row("High", "HIGH", "bright_red", show_breakdown=True)
+        add_row("Medium", "MEDIUM", "yellow")
+
+        console.print(table)
+        console.print("" + ("-" * 50))
+        if failed:
+            console.print(f"[red]FAIL:[/red] Critical issues found. See {output_file}")
+        else:
+            console.print(f"[green]PASS:[/green] No critical issues found. See {output_file}")
+    except Exception:
+        # ANSI color codes for plain text fallback
+        RED = "\033[91m"
+        YELLOW = "\033[93m"
+        GREEN = "\033[92m"
+        CYAN = "\033[96m"
+        RESET = "\033[0m"
+        
+        line = "-" * 50
+        print(line)
+        print(f"{CYAN}SCAN COMPLETE{RESET}")
+        print(line)
+        crit_bd = _format_breakdown(breakdown.get("CRITICAL", {}), ["Secrets", "Code", "Deps", "ZAP"])
+        high_bd = _format_breakdown(breakdown.get("HIGH", {}), ["Secrets", "Code", "Deps", "ZAP"])
+        print(f"{RED}Critical:{RESET} {critical}" + (f"   ({crit_bd})" if crit_bd else ""))
+        print(f"{RED}High:{RESET}     {high}" + (f"   ({high_bd})" if high_bd else ""))
+        print(f"{YELLOW}Medium:{RESET}   {medium}")
+        print(line)
+        if failed:
+            print(f"{RED}FAIL:{RESET} Critical issues found. See {output_file}")
+        else:
+            print(f"{GREEN}PASS:{RESET} No critical issues found. See {output_file}")
+
+    return failed
+
+
 def load_json(report_dir: str, filename: str, default: JsonValue) -> JsonValue:
     """Load a JSON report from report_dir.
 
@@ -17,7 +163,7 @@ def load_json(report_dir: str, filename: str, default: JsonValue) -> JsonValue:
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
+    except (json.JSONDecodeError, OSError, IOError) as e:
         print(f"Warning: Could not parse {filename}: {e}")
         return default
 
@@ -66,7 +212,7 @@ def parse_semgrep(report_dir: str) -> List[Dict[str, Any]]:
                     "file": res.get("path") or "Unknown",
                     "line": start.get("line"),
                     "description": extra.get("message") or "Semgrep finding",
-                    "rule_id": res.get("check_id") or res.get("check_id") or "Unknown",
+                    "rule_id": res.get("check_id") or "Unknown",
                 }
             )
     return findings
@@ -152,11 +298,7 @@ def _severity_key(item: Dict[str, Any]) -> int:
         "INFO": 4,
         "UNKNOWN": 5,
     }
-    sev = item.get("severity", "UNKNOWN")
-    try:
-        sev_str = str(sev).upper()
-    except Exception:
-        sev_str = "UNKNOWN"
+    sev_str = _normalize_severity(item.get("severity", "UNKNOWN"))
     return severity_rank.get(sev_str, 5)
 
 
@@ -173,12 +315,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     all_findings.extend(parse_gitleaks(report_dir))
     all_findings.extend(parse_zap(report_dir))
 
+    # Normalize severities so the JSON is consistent too.
+    for f in all_findings:
+        f["severity"] = _normalize_severity(f.get("severity", "UNKNOWN"))
+
     all_findings.sort(key=_severity_key)
+
+    tools_run: List[str] = []
+    if os.path.exists(os.path.join(report_dir, "trivy.json")):
+        tools_run.append("Trivy")
+    if os.path.exists(os.path.join(report_dir, "semgrep.json")):
+        tools_run.append("Semgrep")
+    if os.path.exists(os.path.join(report_dir, "gitleaks.json")):
+        tools_run.append("Gitleaks")
+    if os.path.exists(os.path.join(report_dir, "zap.json")):
+        tools_run.append("ZAP")
 
     report = {
         "summary": {
             "total_issues": len(all_findings),
-            "tools_run": ["Trivy", "Semgrep", "Gitleaks", "ZAP"],
+            "tools_run": tools_run,
         },
         "findings": all_findings,
     }
@@ -191,7 +347,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         json.dump(report, f, indent=2, ensure_ascii=False)
 
     print(f"Generated {output_file} with {len(all_findings)} issues.")
-    return 0
+
+    failed = print_human_summary(findings=all_findings, output_file=output_file)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
