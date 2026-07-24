@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 from . import aggregate, config, tooling
-from ._models import CliOptions, ToolSelection
+from ._models import CliOptions, ToolRunResult, ToolSelection
+
+StaticToolRunner = Callable[[Path, Path, list[str]], ToolRunResult]
 
 
 def _parse_args(argv: list[str] | None = None) -> CliOptions:
@@ -35,8 +38,8 @@ def _parse_args(argv: list[str] | None = None) -> CliOptions:
     )
 
 
-def _print_result(result: tooling.ToolRunResult) -> None:
-    if result.ok or result.report_created:
+def _print_result(result: ToolRunResult) -> None:
+    if tooling.tool_succeeded(result) or tooling.report_written(result):
         print("   -> Done.")
         return
     if result.warning is not None:
@@ -45,39 +48,42 @@ def _print_result(result: tooling.ToolRunResult) -> None:
     print(f"   -> Warning: {result.name} exited with status {result.returncode}.")
 
 
+def _run_zap(stage: str, report_dir: Path, url: str) -> None:
+    print(f"{stage} Running ZAP...")
+    target = tooling.rewrite_zap_target(url)
+    if target != url:
+        print(
+            "      (Detected localhost: switching to "
+            "'host.docker.internal' for Docker compatibility)"
+        )
+        print(f"      Targeting: {target}")
+    _print_result(tooling.run_zap(report_dir, target))
+
+
 def _run_enabled_tools(
     project_root: Path, report_dir: Path, tools: ToolSelection, url: str, exclude_dirs: list[str]
 ) -> None:
-    if tools.trivy:
-        print("\n[1/4] Running Trivy...")
-        _print_result(tooling.run_trivy(project_root, report_dir, exclude_dirs))
-    else:
-        print(f"\n[1/4] Skipping Trivy (disabled in {config.CONFIG_FILENAME}).")
+    # Built per call rather than at import time so the runners stay monkeypatchable.
+    static_stages: tuple[tuple[str, bool, StaticToolRunner], ...] = (
+        ("Trivy", tools.trivy, tooling.run_trivy),
+        ("Semgrep", tools.semgrep, tooling.run_semgrep),
+        ("Gitleaks", tools.gitleaks, tooling.run_gitleaks),
+    )
+    total = len(static_stages) + 1
 
-    if tools.semgrep:
-        print("[2/4] Running Semgrep...")
-        _print_result(tooling.run_semgrep(project_root, report_dir, exclude_dirs))
-    else:
-        print(f"[2/4] Skipping Semgrep (disabled in {config.CONFIG_FILENAME}).")
+    print()
+    for step, (name, enabled, run_tool) in enumerate(static_stages, start=1):
+        if not enabled:
+            print(f"[{step}/{total}] Skipping {name} (disabled in {config.CONFIG_FILENAME}).")
+            continue
+        print(f"[{step}/{total}] Running {name}...")
+        _print_result(run_tool(project_root, report_dir, exclude_dirs))
 
-    if tools.gitleaks:
-        print("[3/4] Running Gitleaks...")
-        _print_result(tooling.run_gitleaks(project_root, report_dir, exclude_dirs))
-    else:
-        print(f"[3/4] Skipping Gitleaks (disabled in {config.CONFIG_FILENAME}).")
-
+    zap_stage = f"[{total}/{total}]"
     if tools.zap and url:
-        print("[4/4] Running ZAP...")
-        rewritten_target = tooling.rewrite_zap_target(url)
-        if rewritten_target != url:
-            print(
-                "      (Detected localhost: switching to "
-                "'host.docker.internal' for Docker compatibility)"
-            )
-            print(f"      Targeting: {rewritten_target}")
-        _print_result(tooling.run_zap(report_dir, rewritten_target))
+        _run_zap(zap_stage, report_dir, url)
     else:
-        print("[4/4] Skipping ZAP (no URL provided or disabled).")
+        print(f"{zap_stage} Skipping ZAP (no URL provided or disabled).")
 
 
 def run_audit(options: CliOptions) -> int:
@@ -86,7 +92,7 @@ def run_audit(options: CliOptions) -> int:
         cli_url=options.cli_url,
         config_path=options.config_path,
     )
-    report_dir = tooling.ensure_report_dir(options.project_root)
+    report_dir = tooling.prepare_report_dir(options.project_root)
     output_file = options.project_root / "security_audit.json"
 
     print("STARTING SECURITY AUDIT")

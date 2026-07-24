@@ -35,13 +35,20 @@ All under `src/warden/`.
 | --- | --- |
 | `cli.py` | Entry point. Parses arguments, sequences the stages, prints progress, returns the exit code. |
 | `config.py` | Parses `.warden.yaml` and resolves it against CLI arguments into a `ResolvedConfig`. Also the `warden-config` entry point. |
-| `tooling.py` | Builds and runs each scanner's command line. The only module that touches subprocesses. |
-| `aggregate.py` | Parses each tool's JSON, normalises findings, writes the report, prints the summary. Also the `warden-aggregate` entry point. |
-| `_models.py` | Shared dataclasses and typed dicts. No logic. |
+| `tooling.py` | Prepares the report directory and builds and runs each scanner's command line. The only module that touches subprocesses. |
+| `aggregate.py` | Assembles the report from the parsed findings and writes it. Also the `warden-aggregate` entry point. |
+| `_parsers.py` | Turns each tool's JSON into `Finding` records and normalises severities. |
+| `_summary.py` | Counts findings by severity and category and prints the terminal table. |
+| `_json.py` | Type-narrowing helpers for walking untrusted JSON. |
+| `_models.py` | Shared dataclasses, typed dicts, and constants. No logic. |
 
-The dependency direction is one-way: `cli` depends on the other three, and
-`config`, `tooling`, and `aggregate` do not depend on each other. `_models` is a
-leaf.
+The dependency direction is one-way: `cli` depends on `config`, `tooling`, and
+`aggregate`, which do not depend on each other. `aggregate` depends on
+`_parsers` and `_summary`; those depend on `_json`. `_models` is a leaf.
+
+`aggregate.py` and its three helper modules were one file until the parsing,
+rendering, and JSON-walking concerns had each grown large enough to change for
+their own reasons.
 
 ## Data flow through a scan
 
@@ -50,7 +57,8 @@ leaf.
    defaults.
 2. **Prepare the report directory.** `.security_reports/` is created in the
    project root, and appended to `.gitignore` if that file exists and does not
-   already list it.
+   already list it. Any report left by a previous run is deleted, so a tool that
+   is now disabled or that crashes cannot contribute stale findings.
 3. **Run each enabled tool.** Each writes its native JSON into the report
    directory. A tool that is missing or fails produces a warning; the sequence
    continues regardless.

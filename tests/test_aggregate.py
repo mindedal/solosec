@@ -3,7 +3,9 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from warden.aggregate import build_report, compute_human_summary, normalize_severity
+from warden._parsers import normalize_severity, parse_zap
+from warden._summary import compute_human_summary
+from warden.aggregate import build_report
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -30,6 +32,13 @@ def test_build_report_reads_all_supported_tools(tmp_path: Path) -> None:
     assert report["summary"]["tools_run"] == ["Trivy", "Semgrep", "Gitleaks", "ZAP"]
     assert findings[0].severity == "CRITICAL"
     assert report["findings"][0]["tool"] == "Gitleaks"
+
+
+def test_parse_zap_reports_unknown_file_without_an_instance_uri() -> None:
+    findings = parse_zap({"site": [{"alerts": [{"riskcode": "3", "alert": "No instances"}]}]})
+
+    assert len(findings) == 1
+    assert findings[0].file == "Unknown"
 
 
 def test_compute_human_summary_groups_breakdown_by_category(tmp_path: Path) -> None:

@@ -54,7 +54,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-src = ["src", "tests", "bin"]
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["B", "E", "F", "I", "UP", "W"]
@@ -67,7 +67,7 @@ indent-style = "space"
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
-include = ["src", "tests", "bin"]
+include = ["src", "tests"]
 extraPaths = ["src"]
 exclude = [".venv", "build", "dist", "**/node_modules", "**/__pycache__", "**/.*"]
 reportMissingTypeStubs = false

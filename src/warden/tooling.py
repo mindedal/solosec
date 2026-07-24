@@ -3,49 +3,51 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from dataclasses import dataclass
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Final
+
+from ._models import REPORT_FILES, ZAP_HTML_REPORT, CommandResult, ToolRunResult
 
 ZAP_IMAGE: Final[str] = "ghcr.io/zaproxy/zaproxy:stable"
 
 
-@dataclass(slots=True, frozen=True)
-class ToolRunResult:
-    name: str
-    returncode: int | None
-    report_path: Path
-    accepted_returncodes: frozenset[int]
-    warning: str | None = None
-
-    @property
-    def ok(self) -> bool:
-        return self.returncode in self.accepted_returncodes
-
-    @property
-    def report_created(self) -> bool:
-        return self.report_path.exists()
+def tool_succeeded(result: ToolRunResult) -> bool:
+    return result.returncode in result.accepted_returncodes
 
 
-@dataclass(slots=True, frozen=True)
-class CommandResult:
-    returncode: int | None
-    warning: str | None = None
+def report_written(result: ToolRunResult) -> bool:
+    return result.report_path.exists()
 
 
-def ensure_report_dir(project_root: str | Path) -> Path:
+def _clear_stale_reports(report_dir: Path) -> None:
+    for _, filename in REPORT_FILES:
+        (report_dir / filename).unlink(missing_ok=True)
+    (report_dir / ZAP_HTML_REPORT).unlink(missing_ok=True)
+
+
+def _ignore_report_dir(root: Path) -> None:
+    gitignore_path = root / ".gitignore"
+    if not gitignore_path.exists():
+        return
+
+    existing_lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+    if any(line.strip() == ".security_reports/" for line in existing_lines):
+        return
+
+    with gitignore_path.open("a", encoding="utf-8") as handle:
+        if existing_lines and existing_lines[-1].strip():
+            handle.write("\n")
+        handle.write(".security_reports/\n")
+
+
+def prepare_report_dir(project_root: str | Path) -> Path:
+    """Create `.security_reports/`, gitignore it, and drop any previous run's reports."""
     root = Path(project_root).resolve()
     report_dir = root / ".security_reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-
-    gitignore_path = root / ".gitignore"
-    if gitignore_path.exists():
-        existing_lines = gitignore_path.read_text(encoding="utf-8").splitlines()
-        if not any(line.strip() == ".security_reports/" for line in existing_lines):
-            with gitignore_path.open("a", encoding="utf-8") as handle:
-                if existing_lines and existing_lines[-1].strip():
-                    handle.write("\n")
-                handle.write(".security_reports/\n")
+    _clear_stale_reports(report_dir)
+    _ignore_report_dir(root)
     return report_dir
 
 
@@ -84,6 +86,23 @@ def _prettify_json(path: Path) -> None:
     path.write_text(json.dumps(raw_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _tool_result(
+    *,
+    name: str,
+    result: CommandResult,
+    report_path: Path,
+    accepted_returncodes: Iterable[int],
+) -> ToolRunResult:
+    _prettify_json(report_path)
+    return ToolRunResult(
+        name=name,
+        returncode=result.returncode,
+        report_path=report_path,
+        accepted_returncodes=frozenset(accepted_returncodes),
+        warning=result.warning,
+    )
+
+
 def run_trivy(
     project_root: str | Path, report_dir: str | Path, exclude_dirs: list[str]
 ) -> ToolRunResult:
@@ -92,12 +111,11 @@ def run_trivy(
     if exclude_dirs:
         command.extend(["--skip-dirs", ",".join(exclude_dirs)])
     result = _run_command(command, cwd=Path(project_root).resolve())
-    return ToolRunResult(
+    return _tool_result(
         name="Trivy",
-        returncode=result.returncode,
+        result=result,
         report_path=report_path,
-        accepted_returncodes=frozenset({0}),
-        warning=result.warning,
+        accepted_returncodes={0},
     )
 
 
@@ -124,13 +142,11 @@ def run_semgrep(
         stderr_to_devnull=True,
         env_overrides={"PYTHONUTF8": "1"},
     )
-    _prettify_json(report_path)
-    return ToolRunResult(
+    return _tool_result(
         name="Semgrep",
-        returncode=result.returncode,
+        result=result,
         report_path=report_path,
-        accepted_returncodes=frozenset({0, 1}),
-        warning=result.warning,
+        accepted_returncodes={0, 1},
     )
 
 
@@ -153,12 +169,11 @@ def run_gitleaks(
         if exclude_dir:
             command.extend(["--exclude-path", exclude_dir])
     result = _run_command(command, cwd=Path(project_root).resolve(), stderr_to_devnull=True)
-    return ToolRunResult(
+    return _tool_result(
         name="Gitleaks",
-        returncode=result.returncode,
+        result=result,
         report_path=report_path,
-        accepted_returncodes=frozenset({0}),
-        warning=result.warning,
+        accepted_returncodes={0},
     )
 
 
@@ -199,14 +214,13 @@ def run_zap(report_dir: str | Path, url: str) -> ToolRunResult:
         "-J",
         "zap.json",
         "-r",
-        "zap.html",
+        ZAP_HTML_REPORT,
         "-I",
     ]
     result = _run_command(command, cwd=Path(report_dir).resolve())
-    return ToolRunResult(
+    return _tool_result(
         name="ZAP",
-        returncode=result.returncode,
+        result=result,
         report_path=report_path,
-        accepted_returncodes=frozenset({0}),
-        warning=result.warning,
+        accepted_returncodes={0},
     )

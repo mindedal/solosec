@@ -18,6 +18,15 @@ KNOWN_TOOLS = ("trivy", "semgrep", "gitleaks", "zap")
 CONFIG_FILENAME = ".warden.yaml"
 
 
+def tool_selection_as_dict(tools: ToolSelection) -> dict[str, bool]:
+    return {
+        "trivy": tools.trivy,
+        "semgrep": tools.semgrep,
+        "gitleaks": tools.gitleaks,
+        "zap": tools.zap,
+    }
+
+
 def _strip_comment(line: str) -> str:
     out: list[str] = []
     escaped = False
@@ -143,8 +152,7 @@ def _extract_tool_selection(value: RawConfigValue | None) -> ToolSelection:
     if not isinstance(value, dict):
         return ToolSelection()
 
-    tools = ToolSelection()
-    overrides: dict[str, bool] = tools.as_dict()
+    overrides: dict[str, bool] = tool_selection_as_dict(ToolSelection())
     for tool_name in KNOWN_TOOLS:
         raw_value = value.get(tool_name)
         if isinstance(raw_value, bool):
@@ -155,6 +163,13 @@ def _extract_tool_selection(value: RawConfigValue | None) -> ToolSelection:
             overrides[tool_name] = raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
     return ToolSelection(**overrides)
+
+
+def _resolve_target_url(raw: RawConfig) -> str:
+    """`target_url` wins whenever it is present, even when it is empty."""
+    if "target_url" in raw:
+        return _coerce_string(raw["target_url"])
+    return _coerce_string(raw.get("url"))
 
 
 def resolve_config(
@@ -173,8 +188,7 @@ def resolve_config(
         except (OSError, UnicodeDecodeError, ValueError):
             raw = {}
 
-    target_url = _coerce_string(raw.get("target_url")) or _coerce_string(raw.get("url"))
-    resolved_url = cli_url.strip() or target_url.strip()
+    resolved_url = cli_url.strip() or _resolve_target_url(raw).strip()
     exclude_dirs = _extract_exclude_dirs(raw.get("exclude_dirs"))
     tools = _extract_tool_selection(raw.get("tools"))
 
@@ -223,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "url": resolved.url,
                     "exclude_dirs": resolved.exclude_dirs,
-                    "tools": resolved.tools.as_dict(),
+                    "tools": tool_selection_as_dict(resolved.tools),
                 },
                 ensure_ascii=False,
             )
@@ -232,6 +246,6 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"WARDEN_URL={_bash_escape(resolved.url)}")
     print(f"WARDEN_EXCLUDE_DIRS={_bash_escape(','.join(resolved.exclude_dirs))}")
-    for tool_name, enabled in resolved.tools.as_dict().items():
+    for tool_name, enabled in tool_selection_as_dict(resolved.tools).items():
         print(f"WARDEN_TOOL_{tool_name.upper()}={'1' if enabled else '0'}")
     return 0
