@@ -9,6 +9,14 @@ OutputFormat = Literal["json", "bash"]
 
 DEFAULT_FAIL_ON_SEVERITIES: Final[tuple[Severity, ...]] = ("CRITICAL", "HIGH")
 
+REPORT_FILES: Final[tuple[tuple[str, str], ...]] = (
+    ("Trivy", "trivy.json"),
+    ("Semgrep", "semgrep.json"),
+    ("Gitleaks", "gitleaks.json"),
+    ("ZAP", "zap.json"),
+)
+ZAP_HTML_REPORT: Final[str] = "zap.html"
+
 
 class BaseFindingDict(TypedDict):
     tool: str
@@ -51,25 +59,6 @@ class Finding:
     snippet: str | None = None
     solution: str | None = None
 
-    def to_dict(self) -> FindingDict:
-        finding: FindingDict = {
-            "tool": self.tool,
-            "severity": self.severity,
-            "file": self.file,
-            "description": self.description,
-        }
-        if self.line is not None:
-            finding["line"] = self.line
-        if self.fix is not None:
-            finding["fix"] = self.fix
-        if self.rule_id is not None:
-            finding["rule_id"] = self.rule_id
-        if self.snippet is not None:
-            finding["snippet"] = self.snippet
-        if self.solution is not None:
-            finding["solution"] = self.solution
-        return finding
-
 
 @dataclass(slots=True, frozen=True)
 class ToolSelection:
@@ -77,14 +66,6 @@ class ToolSelection:
     semgrep: bool = True
     gitleaks: bool = True
     zap: bool = True
-
-    def as_dict(self) -> dict[str, bool]:
-        return {
-            "trivy": self.trivy,
-            "semgrep": self.semgrep,
-            "gitleaks": self.gitleaks,
-            "zap": self.zap,
-        }
 
 
 @dataclass(slots=True, frozen=True)
@@ -105,6 +86,21 @@ class CliOptions:
 class AggregateCliOptions:
     report_dir: Path
     output_file: Path
+
+
+@dataclass(slots=True, frozen=True)
+class ToolRunResult:
+    name: str
+    returncode: int | None
+    report_path: Path
+    accepted_returncodes: frozenset[int]
+    warning: str | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class CommandResult:
+    returncode: int | None
+    warning: str | None = None
 
 
 @dataclass(slots=True)

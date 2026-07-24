@@ -32,34 +32,82 @@ fi
 
 export PATH="$UV_BIN_DIR:$PATH"
 
+# Where the Linux scanner binaries go. Prefer the system directory, escalate if
+# we cannot write it, and fall back to the user's own bin directory when there
+# is no sudo either -- an unprivileged install must still work.
+BIN_DIR="/usr/local/bin"
+SUDO=""
+if [ "$OS_TYPE" = "Linux" ] && [ ! -w "$BIN_DIR" ]; then
+	if command -v sudo >/dev/null 2>&1; then
+		SUDO="sudo"
+	else
+		BIN_DIR="$UV_BIN_DIR"
+		mkdir -p "$BIN_DIR"
+		echo -e "${YELLOW}   -> No write access to /usr/local/bin and no sudo; using $BIN_DIR.${NC}"
+	fi
+fi
+
+# Gitleaks publishes per-architecture archives; match the Dockerfile's mapping.
+case "$(uname -m)" in
+	x86_64|amd64)  GITLEAKS_ARCH="linux_x64" ;;
+	aarch64|arm64) GITLEAKS_ARCH="linux_arm64" ;;
+	*)             GITLEAKS_ARCH="" ;;
+esac
+
+install_trivy() {
+	if [ "$OS_TYPE" = "Mac" ]; then
+		if ! command -v brew >/dev/null 2>&1; then
+			echo -e "${RED}   Homebrew not found. Please install Trivy manually: https://trivy.dev${NC}"
+			return 0
+		fi
+		brew install trivy
+		return 0
+	fi
+
+	curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+		| $SUDO sh -s -- -b "$BIN_DIR"
+}
+
+install_gitleaks() {
+	if [ "$OS_TYPE" = "Mac" ]; then
+		if ! command -v brew >/dev/null 2>&1; then
+			echo -e "${RED}   Homebrew not found. Please install Gitleaks manually: https://github.com/gitleaks/gitleaks${NC}"
+			return 0
+		fi
+		brew install gitleaks
+		return 0
+	fi
+
+	if [ -z "$GITLEAKS_ARCH" ]; then
+		echo -e "${RED}   No Gitleaks build for $(uname -m). Install it manually: https://github.com/gitleaks/gitleaks${NC}"
+		return 0
+	fi
+
+	local version
+	version="$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest \
+		| grep '"tag_name"' | head -n 1 | sed -E 's/.*"v?([^"]+)".*/\1/')"
+	if [ -z "$version" ]; then
+		echo -e "${RED}   Could not determine the latest Gitleaks release. Install it manually: https://github.com/gitleaks/gitleaks${NC}"
+		return 0
+	fi
+
+	curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${version}/gitleaks_${version}_${GITLEAKS_ARCH}.tar.gz" \
+		| $SUDO tar -xz -C "$BIN_DIR" gitleaks
+}
+
+# A scanner that fails to install is a warning, not a fatal error: Warden runs
+# without it and reports the tool as skipped.
 echo -e "${CYAN}[*] Checking dependency tools...${NC}"
 if ! command -v trivy >/dev/null 2>&1; then
 	echo -e "${YELLOW}   -> Installing Trivy...${NC}"
-	if [ "$OS_TYPE" = "Mac" ]; then
-		if command -v brew >/dev/null 2>&1; then
-			brew install trivy
-		else
-			echo -e "${RED}   Homebrew not found. Please install Trivy manually: https://trivy.dev${NC}"
-		fi
-	else
-		curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
-	fi
+	install_trivy || echo -e "${RED}   Trivy install failed. Warden will report it as unavailable.${NC}"
 else
 	echo -e "${GREEN}   -> Trivy already installed.${NC}"
 fi
 
 if ! command -v gitleaks >/dev/null 2>&1; then
 	echo -e "${YELLOW}   -> Installing Gitleaks...${NC}"
-	if [ "$OS_TYPE" = "Mac" ]; then
-		if command -v brew >/dev/null 2>&1; then
-			brew install gitleaks
-		else
-			echo -e "${RED}   Homebrew not found. Please install Gitleaks manually: https://github.com/gitleaks/gitleaks${NC}"
-		fi
-	else
-		GITLEAKS_VERSION=$(curl -s https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep '"tag_name"' | sed -E 's/.*"v([^"]+)".*/\1/')
-		curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz -C /usr/local/bin gitleaks
-	fi
+	install_gitleaks || echo -e "${RED}   Gitleaks install failed. Warden will report it as unavailable.${NC}"
 else
 	echo -e "${GREEN}   -> Gitleaks already installed.${NC}"
 fi
@@ -68,9 +116,11 @@ echo -e "${CYAN}[*] Installing Warden with uv...${NC}"
 uv python install 3.11
 uv tool install --force --python 3.11 -e "$SCRIPT_DIR"
 
-if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
+# These are unset in a non-interactive shell, so every read needs a default --
+# `set -u` would otherwise abort the script before it finishes.
+if [ -n "${ZSH_VERSION:-}" ] || [ "${SHELL:-}" = "/bin/zsh" ]; then
 	SHELL_RC="$HOME/.zshrc"
-elif [ -n "$BASH_VERSION" ] || [ "$SHELL" = "/bin/bash" ]; then
+elif [ -n "${BASH_VERSION:-}" ] || [ "${SHELL:-}" = "/bin/bash" ]; then
 	SHELL_RC="$HOME/.bashrc"
 else
 	SHELL_RC="$HOME/.profile"

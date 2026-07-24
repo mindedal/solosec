@@ -45,3 +45,4 @@ Background and rationale.
 | Document | Covers |
 | --- | --- |
 | [Contributing](contributing.md) | Development environment, the quality gate, and what CI enforces. |
+| [AGENTS.md](../AGENTS.md) | Behavioural guidelines for AI coding agents working in this repository. |

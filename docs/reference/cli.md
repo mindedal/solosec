@@ -43,6 +43,9 @@ PowerShell habits and POSIX shells. All four spellings set the same value.
 - The report directory `.security_reports/` is created inside the project root
   if absent, and `.security_reports/` is appended to the project's `.gitignore`
   if that file exists and does not already list it.
+- Reports from a previous run are deleted before the scanners start. Only the
+  files listed in [Report format](report-format.md#input-files) and `zap.html`
+  are removed; anything else in the directory is left alone.
 
 ### Exit codes
 

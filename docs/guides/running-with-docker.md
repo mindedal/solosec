@@ -13,19 +13,20 @@ From a clone of this repository:
 docker build -t warden:local .
 ```
 
-The build pulls Trivy and Gitleaks from their upstream release channels. To pin
-versions instead of taking the latest:
+The build pulls Trivy and Gitleaks from their upstream release channels. Both
+default to the latest release. To pin them instead, pass the version you want:
 
 ```bash
 docker build -t warden:local \
-  --build-arg TRIVY_VERSION=0.58.1 \
-  --build-arg GITLEAKS_VERSION=8.21.2 .
+  --build-arg TRIVY_VERSION=<version> \
+  --build-arg GITLEAKS_VERSION=<version> .
 ```
 
-> **TODO(verify):** the two version numbers above are illustrative. The build
-> accepts `TRIVY_VERSION` and `GITLEAKS_VERSION` arguments and defaults both to
-> empty (latest), but this repository does not pin specific versions anywhere,
-> so there is no known-good pair to document.
+Take the values from the projects' own release pages —
+[Trivy](https://github.com/aquasecurity/trivy/releases) and
+[Gitleaks](https://github.com/gitleaks/gitleaks/releases) — without the leading
+`v`. This repository pins neither, so there is no known-good pair to copy;
+choose a release, build, and record what worked for you.
 
 ## Scan a project
 

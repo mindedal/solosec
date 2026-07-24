@@ -32,6 +32,30 @@ def test_resolve_config_prefers_cli_url(tmp_path: Path) -> None:
     assert resolved.url == "http://from-cli"
 
 
+def test_resolve_config_falls_back_to_url_alias(tmp_path: Path) -> None:
+    config_path = tmp_path / ".warden.yaml"
+    config_path.write_text('url: "http://from-alias"\n', encoding="utf-8")
+
+    resolved = resolve_config(project_root=tmp_path, cli_url="")
+
+    assert resolved.url == "http://from-alias"
+
+
+def test_resolve_config_prefers_target_url_even_when_empty(tmp_path: Path) -> None:
+    config_path = tmp_path / ".warden.yaml"
+    config_path.write_text(
+        """
+        target_url: ""
+        url: "http://from-alias"
+        """,
+        encoding="utf-8",
+    )
+
+    resolved = resolve_config(project_root=tmp_path, cli_url="")
+
+    assert resolved.url == ""
+
+
 def test_resolve_config_clears_url_when_zap_is_disabled(tmp_path: Path) -> None:
     config_path = tmp_path / ".warden.yaml"
     config_path.write_text(
