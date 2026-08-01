@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 from . import aggregate, config, tooling
 from ._models import CliOptions, ToolRunResult, ToolSelection
-
-StaticToolRunner = Callable[[Path, Path, list[str]], ToolRunResult]
+from ._scanners import SCANNERS, ZAP
 
 
 def _parse_args(argv: list[str] | None = None) -> CliOptions:
@@ -48,8 +46,20 @@ def _print_result(result: ToolRunResult) -> None:
     print(f"   -> Warning: {result.name} exited with status {result.returncode}.")
 
 
-def _run_zap(stage: str, report_dir: Path, url: str) -> None:
-    print(f"{stage} Running ZAP...")
+def _run_zap_stage(
+    stage: str,
+    report_dir: Path,
+    *,
+    enabled: bool,
+    url: str,
+    runner: tooling.CommandRunner,
+) -> None:
+    """ZAP is not run like the others: it targets a URL through a container, or is skipped."""
+    if not (enabled and url):
+        print(f"{stage} Skipping {ZAP.label} (no URL provided or disabled).")
+        return
+
+    print(f"{stage} Running {ZAP.label}...")
     target = tooling.rewrite_zap_target(url)
     if target != url:
         print(
@@ -57,36 +67,36 @@ def _run_zap(stage: str, report_dir: Path, url: str) -> None:
             "'host.docker.internal' for Docker compatibility)"
         )
         print(f"      Targeting: {target}")
-    _print_result(tooling.run_zap(report_dir, target))
+    _print_result(tooling.run_zap(report_dir, target, runner))
 
 
 def _run_enabled_tools(
-    project_root: Path, report_dir: Path, tools: ToolSelection, url: str, exclude_dirs: list[str]
+    project_root: Path,
+    report_dir: Path,
+    tools: ToolSelection,
+    url: str,
+    exclude_dirs: list[str],
+    runner: tooling.CommandRunner,
 ) -> None:
-    # Built per call rather than at import time so the runners stay monkeypatchable.
-    static_stages: tuple[tuple[str, bool, StaticToolRunner], ...] = (
-        ("Trivy", tools.trivy, tooling.run_trivy),
-        ("Semgrep", tools.semgrep, tooling.run_semgrep),
-        ("Gitleaks", tools.gitleaks, tooling.run_gitleaks),
-    )
-    total = len(static_stages) + 1
+    total = len(SCANNERS)
 
     print()
-    for step, (name, enabled, run_tool) in enumerate(static_stages, start=1):
-        if not enabled:
-            print(f"[{step}/{total}] Skipping {name} (disabled in {config.CONFIG_FILENAME}).")
-            continue
-        print(f"[{step}/{total}] Running {name}...")
-        _print_result(run_tool(project_root, report_dir, exclude_dirs))
+    for step, scanner in enumerate(SCANNERS, start=1):
+        stage = f"[{step}/{total}]"
+        if scanner is ZAP:
+            _run_zap_stage(
+                stage, report_dir, enabled=tools.is_enabled(ZAP.key), url=url, runner=runner
+            )
+        elif not tools.is_enabled(scanner.key):
+            print(f"{stage} Skipping {scanner.label} (disabled in {config.CONFIG_FILENAME}).")
+        else:
+            print(f"{stage} Running {scanner.label}...")
+            _print_result(
+                tooling.run_static_scanner(scanner, project_root, report_dir, exclude_dirs, runner)
+            )
 
-    zap_stage = f"[{total}/{total}]"
-    if tools.zap and url:
-        _run_zap(zap_stage, report_dir, url)
-    else:
-        print(f"{zap_stage} Skipping ZAP (no URL provided or disabled).")
 
-
-def run_audit(options: CliOptions) -> int:
+def run_audit(options: CliOptions, *, runner: tooling.CommandRunner) -> int:
     resolved = config.resolve_config(
         project_root=options.project_root,
         cli_url=options.cli_url,
@@ -106,11 +116,12 @@ def run_audit(options: CliOptions) -> int:
         resolved.tools,
         resolved.url,
         resolved.exclude_dirs,
+        runner,
     )
 
     print("\n[*] Generating Final Report...")
-    failed = aggregate.generate_report(report_dir=report_dir, output_file=output_file)
-    if failed:
+    verdict = aggregate.generate_report(report_dir=report_dir, output_file=output_file)
+    if verdict.failed:
         print("\nAUDIT FAILED!")
         print(f"Report saved to: {output_file}")
         return 1
@@ -120,5 +131,9 @@ def run_audit(options: CliOptions) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    return run_audit(_parse_args(argv))
+def main(
+    argv: list[str] | None = None,
+    *,
+    runner: tooling.CommandRunner = tooling.run_subprocess,
+) -> int:
+    return run_audit(_parse_args(argv), runner=runner)

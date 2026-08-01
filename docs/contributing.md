@@ -61,9 +61,10 @@ uv run pytest
 
 Tests live in `tests/`, with static tool output in `tests/fixtures/`. The
 fixtures are small hand-written samples of each scanner's JSON, used to exercise
-parsing and severity normalisation without running the real scanners. Subprocess
-calls are monkeypatched, so the suite runs without Trivy, Semgrep, Gitleaks, or
-Docker installed.
+parsing and severity normalisation without running the real scanners. Command
+execution is injected rather than patched: tests pass the recording
+`CommandRunner` in `tests/fakes.py` and assert on the command line that was
+built, so the suite runs without Trivy, Semgrep, Gitleaks, or Docker installed.
 
 When adding support for a new field or tool, add a fixture rather than reaching
 for a live scan — it keeps the suite fast and deterministic.
@@ -115,7 +116,7 @@ updating one, update both.
 
 - Public functions are typed; internal helpers are prefixed with `_`.
 - Data structures are frozen dataclasses or `TypedDict`s in `_models.py`, kept
-  free of logic.
+  free of logic; the `Scanner` record and its registry live in `_scanners.py`.
 - `tooling.py` is the only module that runs subprocesses. Keep scanner
   invocation there.
 - `from __future__ import annotations` at the top of every module.

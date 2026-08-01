@@ -38,13 +38,16 @@ All under `src/warden/`.
 | `tooling.py` | Prepares the report directory and builds and runs each scanner's command line. The only module that touches subprocesses. |
 | `aggregate.py` | Assembles the report from the parsed findings and writes it. Also the `warden-aggregate` entry point. |
 | `_parsers.py` | Turns each tool's JSON into `Finding` records and normalises severities. |
-| `_summary.py` | Counts findings by severity and category and prints the terminal table. |
-| `_json.py` | Type-narrowing helpers for walking untrusted JSON. |
+| `_summary.py` | Judges findings into a `Verdict` — counts, category breakdown, and whether the build fails — and prints the terminal table from one. |
+| `_json.py` | Type-narrowing helpers for walking untrusted JSON. A file it cannot parse comes back as an error, not a printed warning. |
+| `_scanners.py` | One `Scanner` record per tool Warden knows about, and the registry of them. |
 | `_models.py` | Shared dataclasses, typed dicts, and constants. No logic. |
 
 The dependency direction is one-way: `cli` depends on `config`, `tooling`, and
-`aggregate`, which do not depend on each other. `aggregate` depends on
-`_parsers` and `_summary`; those depend on `_json`. `_models` is a leaf.
+`aggregate`, which do not depend on each other. Every module that needs to know
+which scanners exist reads `_scanners`, which depends on `_parsers` because each
+record carries its tool's parser. `aggregate` depends on `_parsers` and
+`_summary`; those depend on `_json`. `_models` is a leaf.
 
 `aggregate.py` and its three helper modules were one file until the parsing,
 rendering, and JSON-walking concerns had each grown large enough to change for
@@ -65,7 +68,8 @@ their own reasons.
 4. **Aggregate.** Each report file that exists is parsed into a common `Finding`
    record and severities are normalised onto one scale.
 5. **Report and exit.** Findings are sorted by severity, written to
-   `security_audit.json`, summarised as a table, and reduced to an exit code.
+   `security_audit.json`, judged into a verdict, and summarised as a table. The
+   verdict becomes the exit code.
 
 The stages communicate through files on disk, not in memory. That is why
 `warden-aggregate` can run standalone against a directory of reports that some
@@ -80,12 +84,28 @@ The rationale is that a partial scan is more useful than none — but the
 consequence is that a green build does not prove every scanner ran. `tools_run`
 in the report records which reports were actually found.
 
+A report file that exists but cannot be parsed — a tool that crashed mid-write —
+is treated the same way. `load_json` returns a `LoadedJson`: the parsed data, or
+the reason it could not be read. The leaf module therefore does no terminal I/O,
+and the diagnostic can be asserted as a value. `aggregate` surfaces it, because
+it is the module iterating `SCANNERS` and so the one that knows which scanner
+the file belonged to. Its findings are lost and it is absent from `tools_run`,
+but the run continues.
+
 ### Only Critical and High fail the build
 
-`DEFAULT_FAIL_ON_SEVERITIES` is `("CRITICAL", "HIGH")`. The threshold is a
-parameter of `generate_report`, but nothing in the CLI or config file exposes
-it, so in practice it is fixed. Lower severities are still collected and
-reported.
+`DEFAULT_FAIL_ON_SEVERITIES` is `("CRITICAL", "HIGH")`. The threshold is a fixed
+constant that nothing in the CLI or config file exposes. Lower severities are
+still collected and reported.
+
+The decision is a value rather than a side effect of printing one. `_summary.judge`
+reads that constant and returns a `Verdict`: which of those severities were
+actually present, alongside the counts and breakdown the table is drawn from.
+`Verdict.failed` is derived from that list rather than stored, so the exit code and
+the `PASS`/`FAIL` line cannot disagree. `aggregate.generate_report` returns the
+verdict, `cli.run_audit` reduces it to the exit code, and `_summary.print_summary`
+takes one and only prints — so whether a scan failed can be asserted without
+rendering anything.
 
 Two normalisation choices interact with this and are worth stating plainly:
 Gitleaks findings are assigned `CRITICAL` unconditionally, so any detected
@@ -102,6 +122,28 @@ unsupported syntax is ignored rather than rejected, so a malformed config
 degrades to defaults silently. `warden-config` exists largely to make that
 failure mode visible.
 
+### One record per scanner
+
+Everything Warden knows about a scanner is one `Scanner` record in
+`_scanners.py`: its display label, its report filename, its summary category,
+its parser, and the exit codes it may return. The `.warden.yaml` key is derived
+from the label rather than stored alongside it, so the lowercase and capitalised
+forms of a tool name cannot drift apart. `SCANNERS` is those records in report
+order, and every list of tools in the codebase is a read of it — the files
+cleared before a run, the stages the CLI prints, the reports the aggregator
+parses, `tools_run`, the recognised config keys, the summary categories. Adding
+a scanner is adding a record, a parser, and the code that builds its command
+line.
+
+### Commands reach the operating system through a runner
+
+`tooling.py` does not reach for `subprocess` on its own account. Each `run_*`
+function takes a `CommandRunner`: a callable given the argument vector, working
+directory, environment overrides, and stderr handling, which returns a
+`CommandResult`. `cli.py` passes the production adapter, `tooling.run_subprocess`;
+tests pass a fake that records what it was asked to run. The seam is what makes
+the ZAP invocation and its host-path resolution testable without Docker.
+
 ### ZAP runs as a sibling container
 
 The other three tools are executables on `PATH`. ZAP is invoked as
@@ -115,6 +157,11 @@ mount is a path inside its own container, which the host's Docker daemon cannot
 resolve. The `WARDEN_HOST_REPORT_DIR`, `WARDEN_HOST_WORKSPACE`, and
 `GITHUB_WORKSPACE` environment variables exist to supply the host path instead.
 This is the reason the GitHub Action passes `GITHUB_WORKSPACE` through.
+
+Its record sits in the registry with the other three, but its run behaviour is
+deliberately not unified with theirs: it takes a target URL instead of a project
+root, runs with the report directory as its working directory, and is the one
+stage the CLI special-cases.
 
 ### The container runs unprivileged
 

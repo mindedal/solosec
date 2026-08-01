@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, TypedDict
 
 Severity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
-OutputFormat = Literal["json", "bash"]
 
+SEVERITIES: Final[tuple[Severity, ...]] = (
+    "CRITICAL",
+    "HIGH",
+    "MEDIUM",
+    "LOW",
+    "INFO",
+    "UNKNOWN",
+)
 DEFAULT_FAIL_ON_SEVERITIES: Final[tuple[Severity, ...]] = ("CRITICAL", "HIGH")
 
-REPORT_FILES: Final[tuple[tuple[str, str], ...]] = (
-    ("Trivy", "trivy.json"),
-    ("Semgrep", "semgrep.json"),
-    ("Gitleaks", "gitleaks.json"),
-    ("ZAP", "zap.json"),
-)
 ZAP_HTML_REPORT: Final[str] = "zap.html"
 
 
@@ -62,10 +63,12 @@ class Finding:
 
 @dataclass(slots=True, frozen=True)
 class ToolSelection:
-    trivy: bool = True
-    semgrep: bool = True
-    gitleaks: bool = True
-    zap: bool = True
+    """The scanner keys left enabled after `.warden.yaml` has been applied."""
+
+    enabled: frozenset[str]
+
+    def is_enabled(self, key: str) -> bool:
+        return key in self.enabled
 
 
 @dataclass(slots=True, frozen=True)
@@ -103,26 +106,14 @@ class CommandResult:
     warning: str | None = None
 
 
-@dataclass(slots=True)
-class HumanSummary:
-    counts: SummaryCounts = field(
-        default_factory=lambda: {
-            "CRITICAL": 0,
-            "HIGH": 0,
-            "MEDIUM": 0,
-            "LOW": 0,
-            "INFO": 0,
-            "UNKNOWN": 0,
-        }
-    )
-    breakdown: SummaryBreakdown = field(
-        default_factory=lambda: {
-            "CRITICAL": {},
-            "HIGH": {},
-            "MEDIUM": {},
-            "LOW": {},
-            "INFO": {},
-            "UNKNOWN": {},
-        }
-    )
-    total: int = 0
+@dataclass(slots=True, frozen=True)
+class Verdict:
+    """The build's pass/fail decision, and the tallies it was reached from."""
+
+    triggered_by: tuple[Severity, ...]
+    counts: SummaryCounts
+    breakdown: SummaryBreakdown
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.triggered_by)
