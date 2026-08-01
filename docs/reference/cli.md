@@ -87,7 +87,6 @@ what Warden will actually do before running a scan.
 
 ```
 usage: warden-config [-h] [--cli-url CLI_URL] [--config CONFIG]
-                      [--format {json,bash}]
                       project_root
 ```
 
@@ -96,7 +95,6 @@ usage: warden-config [-h] [--cli-url CLI_URL] [--config CONFIG]
 | `project_root` | required | Directory whose config to resolve. |
 | `--cli-url` | `""` | Simulate a `--url` flag, to check precedence. |
 | `--config` | `<project_root>/.warden.yaml` | Alternate config path. |
-| `--format` | `json` | `json` for a single object, `bash` for shell-assignable variables. |
 
 Exits `0`.
 
@@ -106,19 +104,6 @@ Exits `0`.
 $ warden-config .
 {"url": "", "exclude_dirs": [], "tools": {"trivy": true, "semgrep": true, "gitleaks": true, "zap": true}}
 ```
-
-```console
-$ warden-config . --format bash
-WARDEN_URL=''
-WARDEN_EXCLUDE_DIRS=''
-WARDEN_TOOL_TRIVY=1
-WARDEN_TOOL_SEMGREP=1
-WARDEN_TOOL_GITLEAKS=1
-WARDEN_TOOL_ZAP=1
-```
-
-In `bash` format, values are single-quote escaped, `exclude_dirs` is joined with
-commas, and each tool becomes `WARDEN_TOOL_<NAME>` set to `1` or `0`.
 
 ---
 

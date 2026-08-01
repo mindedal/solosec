@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
+from pytest import CaptureFixture
+
+from warden._json import get_int, load_json
+from warden._models import Finding, Severity
 from warden._parsers import normalize_severity, parse_zap
-from warden._summary import compute_human_summary
-from warden.aggregate import build_report
+from warden._scanners import SCANNERS
+from warden._summary import judge, print_summary
+from warden.aggregate import build_report, main
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -14,24 +20,82 @@ def _copy_fixture(name: str, destination: Path) -> None:
     shutil.copyfile(FIXTURE_DIR / name, destination / name)
 
 
+def _findings(*severities: Severity) -> list[Finding]:
+    return [
+        Finding(tool="Trivy", severity=severity, file="app.py", description="issue")
+        for severity in severities
+    ]
+
+
 def test_normalize_severity_maps_tool_specific_values() -> None:
     assert normalize_severity("crit") == "CRITICAL"
     assert normalize_severity("warning") == "MEDIUM"
     assert normalize_severity(None) == "UNKNOWN"
 
 
+def test_get_int_accepts_a_numeric_string_and_rejects_anything_else() -> None:
+    assert get_int({"riskcode": "3"}, "riskcode") == 3
+    assert get_int({"riskcode": "high"}, "riskcode") is None
+
+
+def test_load_json_returns_the_parsed_document_when_the_file_is_valid(tmp_path: Path) -> None:
+    report = tmp_path / "trivy.json"
+    report.write_text('{"Results": []}', encoding="utf-8")
+
+    loaded = load_json(report)
+
+    assert loaded.data == {"Results": []}
+    assert loaded.error is None
+
+
+def test_load_json_reports_a_parse_failure_as_a_value(tmp_path: Path) -> None:
+    report = tmp_path / "trivy.json"
+    report.write_text('{"Results": [', encoding="utf-8")
+
+    loaded = load_json(report)
+
+    assert loaded.data is None
+    assert loaded.error
+
+
+def test_load_json_treats_a_missing_file_as_neither_data_nor_error(tmp_path: Path) -> None:
+    loaded = load_json(tmp_path / "trivy.json")
+
+    assert loaded.data is None
+    assert loaded.error is None
+
+
 def test_build_report_reads_all_supported_tools(tmp_path: Path) -> None:
-    _copy_fixture("trivy.json", tmp_path)
-    _copy_fixture("semgrep.json", tmp_path)
-    _copy_fixture("gitleaks.json", tmp_path)
-    _copy_fixture("zap.json", tmp_path)
+    for scanner in SCANNERS:
+        _copy_fixture(scanner.report_file, tmp_path)
 
     findings, report = build_report(tmp_path)
 
     assert len(findings) == 4
-    assert report["summary"]["tools_run"] == ["Trivy", "Semgrep", "Gitleaks", "ZAP"]
+    assert report["summary"]["tools_run"] == [scanner.label for scanner in SCANNERS]
     assert findings[0].severity == "CRITICAL"
     assert report["findings"][0]["tool"] == "Gitleaks"
+
+
+def test_build_report_keeps_going_when_one_report_cannot_be_parsed(tmp_path: Path) -> None:
+    _copy_fixture("gitleaks.json", tmp_path)
+    (tmp_path / "trivy.json").write_text('{"Results": [', encoding="utf-8")
+
+    findings, report = build_report(tmp_path)
+
+    assert report["summary"]["tools_run"] == ["Gitleaks"]
+    assert [finding.tool for finding in findings] == ["Gitleaks"]
+
+
+def test_build_report_warns_about_a_report_it_could_not_parse(
+    tmp_path: Path,
+    capsys: CaptureFixture[str],
+) -> None:
+    (tmp_path / "trivy.json").write_text('{"Results": [', encoding="utf-8")
+
+    build_report(tmp_path)
+
+    assert "Warning: Could not parse trivy.json:" in capsys.readouterr().out
 
 
 def test_parse_zap_reports_unknown_file_without_an_instance_uri() -> None:
@@ -41,14 +105,78 @@ def test_parse_zap_reports_unknown_file_without_an_instance_uri() -> None:
     assert findings[0].file == "Unknown"
 
 
-def test_compute_human_summary_groups_breakdown_by_category(tmp_path: Path) -> None:
+def test_judge_groups_breakdown_by_category(tmp_path: Path) -> None:
     _copy_fixture("trivy.json", tmp_path)
     _copy_fixture("gitleaks.json", tmp_path)
 
     findings, _ = build_report(tmp_path)
-    summary = compute_human_summary(findings)
+    verdict = judge(findings)
 
-    assert summary.counts["CRITICAL"] == 1
-    assert summary.counts["HIGH"] == 1
-    assert summary.breakdown["CRITICAL"] == {"Secrets": 1}
-    assert summary.breakdown["HIGH"] == {"Deps": 1}
+    assert verdict.counts["CRITICAL"] == 1
+    assert verdict.counts["HIGH"] == 1
+    assert verdict.breakdown["CRITICAL"] == {"Secrets": 1}
+    assert verdict.breakdown["HIGH"] == {"Deps": 1}
+
+
+def test_judge_fails_on_a_critical_finding() -> None:
+    verdict = judge(_findings("CRITICAL"))
+
+    assert verdict.failed
+    assert verdict.triggered_by == ("CRITICAL",)
+
+
+def test_judge_fails_on_a_high_finding() -> None:
+    verdict = judge(_findings("HIGH"))
+
+    assert verdict.failed
+    assert verdict.triggered_by == ("HIGH",)
+
+
+def test_judge_passes_when_nothing_reaches_the_threshold() -> None:
+    verdict = judge(_findings("MEDIUM", "LOW", "INFO", "UNKNOWN"))
+
+    assert not verdict.failed
+    assert verdict.triggered_by == ()
+    assert verdict.counts["MEDIUM"] == 1
+
+
+def test_judge_passes_when_there_are_no_findings() -> None:
+    verdict = judge([])
+
+    assert not verdict.failed
+    assert verdict.triggered_by == ()
+    assert verdict.counts["CRITICAL"] == 0
+
+
+def test_judge_reports_every_severity_that_triggered_the_failure() -> None:
+    verdict = judge(_findings("CRITICAL", "HIGH", "MEDIUM"))
+
+    assert verdict.triggered_by == ("CRITICAL", "HIGH")
+
+
+def test_print_summary_renders_a_table_for_a_failing_verdict(
+    capsys: CaptureFixture[str],
+) -> None:
+    print_summary(verdict=judge(_findings("CRITICAL")), output_file="security_audit.json")
+
+    output = capsys.readouterr().out
+    assert "SCAN COMPLETE" in output
+    assert "Critical" in output
+    assert "FAIL: High/Critical issues found. See security_audit.json" in output
+
+
+def test_aggregate_main_exits_non_zero_when_a_critical_finding_is_present(tmp_path: Path) -> None:
+    _copy_fixture("gitleaks.json", tmp_path)
+    output_file = tmp_path / "security_audit.json"
+
+    exit_code = main([str(tmp_path), str(output_file)])
+
+    assert exit_code == 1
+    report = json.loads(output_file.read_text(encoding="utf-8"))
+    assert report["summary"]["total_issues"] == 1
+
+
+def test_aggregate_main_exits_zero_when_no_reports_are_present(tmp_path: Path) -> None:
+    exit_code = main([str(tmp_path), str(tmp_path / "security_audit.json")])
+
+    assert exit_code == 0

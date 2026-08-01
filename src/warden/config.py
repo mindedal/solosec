@@ -6,25 +6,15 @@ import textwrap
 from pathlib import Path
 from typing import cast
 
-from ._models import CliOptions, OutputFormat, ResolvedConfig, ToolSelection
+from ._models import CliOptions, ResolvedConfig
+from ._scanners import SCANNERS
 
 ScalarValue = str | int | bool
 RawConfigValue = ScalarValue | list[str] | dict[str, ScalarValue]
 RawConfig = dict[str, RawConfigValue]
 
 
-KNOWN_TOOLS = ("trivy", "semgrep", "gitleaks", "zap")
-
 CONFIG_FILENAME = ".warden.yaml"
-
-
-def tool_selection_as_dict(tools: ToolSelection) -> dict[str, bool]:
-    return {
-        "trivy": tools.trivy,
-        "semgrep": tools.semgrep,
-        "gitleaks": tools.gitleaks,
-        "zap": tools.zap,
-    }
 
 
 def _strip_comment(line: str) -> str:
@@ -148,21 +138,22 @@ def _extract_exclude_dirs(value: RawConfigValue | None) -> list[str]:
     return [item for item in value if item.strip()]
 
 
-def _extract_tool_selection(value: RawConfigValue | None) -> ToolSelection:
-    if not isinstance(value, dict):
-        return ToolSelection()
+def _tool_enabled(raw_value: ScalarValue | None) -> bool:
+    """A key the config file does not mention leaves its scanner enabled."""
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, int):
+        return bool(raw_value)
+    if isinstance(raw_value, str):
+        return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+    return True
 
-    overrides: dict[str, bool] = tool_selection_as_dict(ToolSelection())
-    for tool_name in KNOWN_TOOLS:
-        raw_value = value.get(tool_name)
-        if isinstance(raw_value, bool):
-            overrides[tool_name] = raw_value
-        elif isinstance(raw_value, int):
-            overrides[tool_name] = bool(raw_value)
-        elif isinstance(raw_value, str):
-            overrides[tool_name] = raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
-    return ToolSelection(**overrides)
+def _extract_enabled_tools(value: RawConfigValue | None) -> frozenset[str]:
+    overrides: dict[str, ScalarValue] = value if isinstance(value, dict) else {}
+    return frozenset(
+        scanner.key for scanner in SCANNERS if _tool_enabled(overrides.get(scanner.key))
+    )
 
 
 def _resolve_target_url(raw: RawConfig) -> str:
@@ -190,27 +181,23 @@ def resolve_config(
 
     resolved_url = cli_url.strip() or _resolve_target_url(raw).strip()
     exclude_dirs = _extract_exclude_dirs(raw.get("exclude_dirs"))
-    tools = _extract_tool_selection(raw.get("tools"))
+    enabled_tools = _extract_enabled_tools(raw.get("tools"))
 
-    if not tools.zap:
+    # A URL is only meaningful while some scanner that targets one is still enabled.
+    if not any(scanner.requires_url and scanner.key in enabled_tools for scanner in SCANNERS):
         resolved_url = ""
 
-    return ResolvedConfig(url=resolved_url, exclude_dirs=exclude_dirs, tools=tools)
+    return ResolvedConfig(url=resolved_url, exclude_dirs=exclude_dirs, enabled_tools=enabled_tools)
 
 
-def _bash_escape(value: str) -> str:
-    return "'" + value.replace("'", "'\\''") + "'"
-
-
-def _parse_args(argv: list[str] | None = None) -> tuple[CliOptions, OutputFormat]:
+def _parse_args(argv: list[str] | None = None) -> CliOptions:
     parser = argparse.ArgumentParser(prog="warden-config")
     parser.add_argument("project_root", help="Project root directory")
     parser.add_argument("--cli-url", default="", help="URL passed via CLI (overrides config)")
     parser.add_argument("--config", default=None, help=f"Path to {CONFIG_FILENAME}")
-    parser.add_argument("--format", choices=["json", "bash"], default="json")
     namespace = parser.parse_args(argv)
 
-    options = CliOptions(
+    return CliOptions(
         project_root=Path(cast(str, namespace.project_root)).resolve(),
         cli_url=cast(str, namespace.cli_url),
         config_path=(
@@ -219,33 +206,26 @@ def _parse_args(argv: list[str] | None = None) -> tuple[CliOptions, OutputFormat
             else None
         ),
     )
-    output_format = cast(OutputFormat, namespace.format)
-    return options, output_format
 
 
 def main(argv: list[str] | None = None) -> int:
-    options, output_format = _parse_args(argv)
+    options = _parse_args(argv)
     resolved = resolve_config(
         project_root=options.project_root,
         cli_url=options.cli_url,
         config_path=options.config_path,
     )
 
-    if output_format == "json":
-        print(
-            json.dumps(
-                {
-                    "url": resolved.url,
-                    "exclude_dirs": resolved.exclude_dirs,
-                    "tools": tool_selection_as_dict(resolved.tools),
+    print(
+        json.dumps(
+            {
+                "url": resolved.url,
+                "exclude_dirs": resolved.exclude_dirs,
+                "tools": {
+                    scanner.key: scanner.key in resolved.enabled_tools for scanner in SCANNERS
                 },
-                ensure_ascii=False,
-            )
+            },
+            ensure_ascii=False,
         )
-        return 0
-
-    print(f"WARDEN_URL={_bash_escape(resolved.url)}")
-    print(f"WARDEN_EXCLUDE_DIRS={_bash_escape(','.join(resolved.exclude_dirs))}")
-    for tool_name, enabled in tool_selection_as_dict(resolved.tools).items():
-        print(f"WARDEN_TOOL_{tool_name.upper()}={'1' if enabled else '0'}")
+    )
     return 0

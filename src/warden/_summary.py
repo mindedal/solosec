@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -8,16 +9,18 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from ._models import DEFAULT_FAIL_ON_SEVERITIES, Finding, HumanSummary, Severity
+from ._models import (
+    DEFAULT_FAIL_ON_SEVERITIES,
+    SEVERITIES,
+    Finding,
+    Severity,
+    SummaryBreakdown,
+    SummaryCounts,
+)
 from ._parsers import normalize_severity
+from ._scanners import CATEGORY_ORDER, SCANNERS
 
-TOOL_CATEGORIES: Final[dict[str, str]] = {
-    "gitleaks": "Secrets",
-    "semgrep": "Code",
-    "trivy": "Deps",
-    "zap": "ZAP",
-}
-CATEGORY_ORDER: Final[list[str]] = ["Secrets", "Code", "Deps", "ZAP"]
+TOOL_CATEGORIES: Final[dict[str, str]] = {scanner.label: scanner.category for scanner in SCANNERS}
 SUMMARY_ROWS: Final[tuple[tuple[str, Severity, str, bool], ...]] = (
     ("Critical", "CRITICAL", "red", True),
     ("High", "HIGH", "bright_red", True),
@@ -25,27 +28,46 @@ SUMMARY_ROWS: Final[tuple[tuple[str, Severity, str, bool], ...]] = (
 )
 
 
+@dataclass(slots=True, frozen=True)
+class Verdict:
+    """The build's pass/fail decision, and the tallies it was reached from."""
+
+    triggered_by: tuple[Severity, ...]
+    counts: SummaryCounts
+    breakdown: SummaryBreakdown
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.triggered_by)
+
+
 def _category_for_tool(tool: str) -> str:
-    normalized = tool.strip().lower()
-    return TOOL_CATEGORIES.get(normalized, tool or "Other")
+    return TOOL_CATEGORIES.get(tool, tool)
 
 
-def compute_human_summary(findings: Sequence[Finding]) -> HumanSummary:
-    summary = HumanSummary(total=len(findings))
+def judge(findings: Sequence[Finding]) -> Verdict:
+    """Tally the findings and decide whether they fail the build."""
+    counts: SummaryCounts = dict.fromkeys(SEVERITIES, 0)
+    breakdown: SummaryBreakdown = {severity: {} for severity in SEVERITIES}
     for finding in findings:
         severity = normalize_severity(finding.severity)
-        summary.counts[severity] += 1
+        counts[severity] += 1
         category = _category_for_tool(finding.tool)
-        severity_breakdown = summary.breakdown[severity]
+        severity_breakdown = breakdown[severity]
         severity_breakdown[category] = severity_breakdown.get(category, 0) + 1
-    return summary
+    return Verdict(
+        triggered_by=tuple(
+            severity for severity in DEFAULT_FAIL_ON_SEVERITIES if counts[severity] > 0
+        ),
+        counts=counts,
+        breakdown=breakdown,
+    )
 
 
-def _format_breakdown(items: Mapping[str, int], order: Sequence[str] | None = None) -> str:
+def _format_breakdown(items: Mapping[str, int], order: Sequence[str]) -> str:
     if not items:
         return ""
-    keys = list(order) if order is not None else sorted(items)
-    return ", ".join(f"{key}: {items[key]}" for key in keys if items.get(key))
+    return ", ".join(f"{key}: {items[key]}" for key in order if items.get(key))
 
 
 def _status_summary(failed: bool) -> tuple[str, str, str]:
@@ -54,17 +76,13 @@ def _status_summary(failed: bool) -> tuple[str, str, str]:
     return "green", "PASS", "No High/Critical issues found."
 
 
-def print_human_summary(
+def print_summary(
     *,
-    findings: Sequence[Finding],
+    verdict: Verdict,
     output_file: str | Path,
-    fail_on_severities: Sequence[Severity] | None = None,
-) -> bool:
-    summary = compute_human_summary(findings)
-    counts = summary.counts
-    breakdown = summary.breakdown
-    failure_thresholds = tuple(fail_on_severities or DEFAULT_FAIL_ON_SEVERITIES)
-    failed = any(counts[severity] > 0 for severity in failure_thresholds)
+) -> None:
+    counts = verdict.counts
+    breakdown = verdict.breakdown
     output_path = str(output_file)
 
     console = Console()
@@ -89,9 +107,8 @@ def print_human_summary(
 
     console.print(table)
     console.print("-" * 50)
-    status_style, status_label, summary_line = _status_summary(failed)
+    status_style, status_label, summary_line = _status_summary(verdict.failed)
     status_message = (
         f"[{status_style}]{status_label}:[/{status_style}] {summary_line} See {output_path}"
     )
     console.print(status_message)
-    return failed

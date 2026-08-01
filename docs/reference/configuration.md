@@ -115,7 +115,7 @@ accepted.
 CLI flag is applied, so it overrides an explicit `--url`:
 
 ```console
-$ warden-config . --cli-url "http://example.com" --format json
+$ warden-config . --cli-url "http://example.com"
 {"url": "", "exclude_dirs": [...], "tools": {..., "zap": false}}
 ```
 

@@ -2,30 +2,20 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Final, cast
+from typing import cast
 
 from ._json import load_json
 from ._models import (
-    REPORT_FILES,
     AggregateCliOptions,
     AggregateReportDict,
     Finding,
     FindingDict,
-    Severity,
 )
-from ._parsers import parse_gitleaks, parse_semgrep, parse_trivy, parse_zap, severity_rank
-from ._summary import print_human_summary
-
-ReportParser = Callable[[object | None], list[Finding]]
-
-TOOL_PARSERS: Final[dict[str, ReportParser]] = {
-    "Trivy": parse_trivy,
-    "Semgrep": parse_semgrep,
-    "Gitleaks": parse_gitleaks,
-    "ZAP": parse_zap,
-}
+from ._parsers import severity_rank
+from ._scanners import SCANNERS, Scanner
+from ._summary import Verdict, judge, print_summary
 
 
 def finding_to_dict(finding: Finding) -> FindingDict:
@@ -48,20 +38,25 @@ def finding_to_dict(finding: Finding) -> FindingDict:
     return entry
 
 
-def _load_reports(report_dir: Path) -> dict[str, object | None]:
-    return {tool_name: load_json(report_dir / filename) for tool_name, filename in REPORT_FILES}
+def _load_reports(report_dir: Path) -> list[tuple[Scanner, object | None]]:
+    """Read every scanner's report, warning about any that is present but unparsable."""
+    reports: list[tuple[Scanner, object | None]] = []
+    for scanner in SCANNERS:
+        loaded = load_json(report_dir / scanner.report_file)
+        if loaded.error is not None:
+            print(f"Warning: Could not parse {scanner.report_file}: {loaded.error}")
+        reports.append((scanner, loaded.data))
+    return reports
 
 
-def detect_tools_run(reports: Mapping[str, object | None]) -> list[str]:
-    return [tool_name for tool_name, _ in REPORT_FILES if reports.get(tool_name) is not None]
+def detect_tools_run(reports: Sequence[tuple[Scanner, object | None]]) -> list[str]:
+    return [scanner.label for scanner, raw_report in reports if raw_report is not None]
 
 
 def build_report(report_dir: str | Path) -> tuple[list[Finding], AggregateReportDict]:
     reports = _load_reports(Path(report_dir))
     findings = [
-        finding
-        for tool_name, _ in REPORT_FILES
-        for finding in TOOL_PARSERS[tool_name](reports[tool_name])
+        finding for scanner, raw_report in reports for finding in scanner.parser(raw_report)
     ]
     findings.sort(key=lambda finding: severity_rank(finding.severity))
     report: AggregateReportDict = {
@@ -84,16 +79,13 @@ def generate_report(
     *,
     report_dir: str | Path,
     output_file: str | Path,
-    fail_on_severities: Sequence[Severity] | None = None,
-) -> bool:
+) -> Verdict:
     findings, report = build_report(report_dir)
     write_report(output_file, report)
     print(f"Generated {output_file} with {len(findings)} issues.")
-    return print_human_summary(
-        findings=findings,
-        output_file=output_file,
-        fail_on_severities=fail_on_severities,
-    )
+    verdict = judge(findings)
+    print_summary(verdict=verdict, output_file=output_file)
+    return verdict
 
 
 def _parse_args(argv: list[str] | None = None) -> AggregateCliOptions:
@@ -119,5 +111,5 @@ def _parse_args(argv: list[str] | None = None) -> AggregateCliOptions:
 def main(argv: list[str] | None = None) -> int:
     options = _parse_args(argv)
     print(f"--- Aggregating Reports from {options.report_dir} ---")
-    failed = generate_report(report_dir=options.report_dir, output_file=options.output_file)
-    return 1 if failed else 0
+    verdict = generate_report(report_dir=options.report_dir, output_file=options.output_file)
+    return 1 if verdict.failed else 0

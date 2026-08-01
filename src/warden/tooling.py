@@ -3,13 +3,25 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Final
+from typing import Protocol
 
-from ._models import REPORT_FILES, ZAP_HTML_REPORT, CommandResult, ToolRunResult
+from ._models import CommandResult, ToolRunResult
+from ._scanners import SCANNERS, Scanner, ScanRequest
 
-ZAP_IMAGE: Final[str] = "ghcr.io/zaproxy/zaproxy:stable"
+
+class CommandRunner(Protocol):
+    """How a built command line reaches the operating system."""
+
+    def __call__(
+        self,
+        args: list[str],
+        *,
+        cwd: Path,
+        stderr_to_devnull: bool = False,
+        env_overrides: dict[str, str] | None = None,
+    ) -> CommandResult: ...
 
 
 def tool_succeeded(result: ToolRunResult) -> bool:
@@ -21,9 +33,9 @@ def report_written(result: ToolRunResult) -> bool:
 
 
 def _clear_stale_reports(report_dir: Path) -> None:
-    for _, filename in REPORT_FILES:
-        (report_dir / filename).unlink(missing_ok=True)
-    (report_dir / ZAP_HTML_REPORT).unlink(missing_ok=True)
+    for scanner in SCANNERS:
+        for filename in (scanner.report_file, *scanner.extra_artifacts):
+            (report_dir / filename).unlink(missing_ok=True)
 
 
 def _ignore_report_dir(root: Path) -> None:
@@ -51,13 +63,14 @@ def prepare_report_dir(project_root: str | Path) -> Path:
     return report_dir
 
 
-def _run_command(
+def run_subprocess(
     args: list[str],
     *,
     cwd: Path,
     stderr_to_devnull: bool = False,
     env_overrides: dict[str, str] | None = None,
 ) -> CommandResult:
+    """The production `CommandRunner`: hand the command line to the operating system."""
     environment = os.environ.copy()
     if env_overrides is not None:
         environment.update(env_overrides)
@@ -86,141 +99,39 @@ def _prettify_json(path: Path) -> None:
     path.write_text(json.dumps(raw_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _tool_result(
+def scan_request(
+    scanner: Scanner,
     *,
-    name: str,
-    result: CommandResult,
-    report_path: Path,
-    accepted_returncodes: Iterable[int],
-) -> ToolRunResult:
-    _prettify_json(report_path)
+    project_root: str | Path,
+    report_dir: str | Path,
+    exclude_dirs: Sequence[str] = (),
+    url: str = "",
+) -> ScanRequest:
+    """Everything `scanner.build_command` needs, with the paths already resolved."""
+    resolved_report_dir = Path(report_dir).resolve()
+    return ScanRequest(
+        project_root=Path(project_root).resolve(),
+        report_dir=resolved_report_dir,
+        report_path=resolved_report_dir / scanner.report_file,
+        exclude_dirs=tuple(exclude_dirs),
+        url=url,
+    )
+
+
+def run_scanner(scanner: Scanner, request: ScanRequest, runner: CommandRunner) -> ToolRunResult:
+    """Build this scanner's command line, run it, and normalise what came back."""
+    command = scanner.build_command(request)
+    result = runner(
+        command.args,
+        cwd=command.cwd,
+        stderr_to_devnull=command.stderr_to_devnull,
+        env_overrides=command.env_overrides,
+    )
+    _prettify_json(request.report_path)
     return ToolRunResult(
-        name=name,
+        name=scanner.label,
         returncode=result.returncode,
-        report_path=report_path,
-        accepted_returncodes=frozenset(accepted_returncodes),
+        report_path=request.report_path,
+        accepted_returncodes=scanner.accepted_returncodes,
         warning=result.warning,
-    )
-
-
-def run_trivy(
-    project_root: str | Path, report_dir: str | Path, exclude_dirs: list[str]
-) -> ToolRunResult:
-    report_path = Path(report_dir) / "trivy.json"
-    command = ["trivy", "fs", ".", "--format", "json", "--output", str(report_path), "--quiet"]
-    if exclude_dirs:
-        command.extend(["--skip-dirs", ",".join(exclude_dirs)])
-    result = _run_command(command, cwd=Path(project_root).resolve())
-    return _tool_result(
-        name="Trivy",
-        result=result,
-        report_path=report_path,
-        accepted_returncodes={0},
-    )
-
-
-def run_semgrep(
-    project_root: str | Path, report_dir: str | Path, exclude_dirs: list[str]
-) -> ToolRunResult:
-    report_path = Path(report_dir) / "semgrep.json"
-    command = [
-        "semgrep",
-        "scan",
-        "--config=auto",
-        "--json",
-        "--output",
-        str(report_path),
-        "--quiet",
-        ".",
-    ]
-    for exclude_dir in exclude_dirs:
-        if exclude_dir:
-            command.extend(["--exclude", exclude_dir])
-    result = _run_command(
-        command,
-        cwd=Path(project_root).resolve(),
-        stderr_to_devnull=True,
-        env_overrides={"PYTHONUTF8": "1"},
-    )
-    return _tool_result(
-        name="Semgrep",
-        result=result,
-        report_path=report_path,
-        accepted_returncodes={0, 1},
-    )
-
-
-def run_gitleaks(
-    project_root: str | Path, report_dir: str | Path, exclude_dirs: list[str]
-) -> ToolRunResult:
-    report_path = Path(report_dir) / "gitleaks.json"
-    command = [
-        "gitleaks",
-        "detect",
-        "--source",
-        ".",
-        "--no-git",
-        "--report-path",
-        str(report_path),
-        "--exit-code",
-        "0",
-    ]
-    for exclude_dir in exclude_dirs:
-        if exclude_dir:
-            command.extend(["--exclude-path", exclude_dir])
-    result = _run_command(command, cwd=Path(project_root).resolve(), stderr_to_devnull=True)
-    return _tool_result(
-        name="Gitleaks",
-        result=result,
-        report_path=report_path,
-        accepted_returncodes={0},
-    )
-
-
-def rewrite_zap_target(url: str) -> str:
-    if "localhost" in url or "127.0.0.1" in url:
-        return url.replace("localhost", "host.docker.internal").replace(
-            "127.0.0.1", "host.docker.internal"
-        )
-    return url
-
-
-def resolve_host_report_dir(report_dir: str | Path) -> Path:
-    report_path = Path(report_dir).resolve()
-    if host_report_dir := os.environ.get("WARDEN_HOST_REPORT_DIR"):
-        return Path(host_report_dir)
-    if host_workspace := os.environ.get("WARDEN_HOST_WORKSPACE"):
-        return Path(host_workspace) / ".security_reports"
-    if github_workspace := os.environ.get("GITHUB_WORKSPACE"):
-        return Path(github_workspace) / ".security_reports"
-    return report_path
-
-
-def run_zap(report_dir: str | Path, url: str) -> ToolRunResult:
-    report_path = Path(report_dir) / "zap.json"
-    host_report_dir = resolve_host_report_dir(report_dir)
-    target = rewrite_zap_target(url)
-    command = [
-        "docker",
-        "run",
-        "--rm",
-        "-v",
-        f"{host_report_dir}:/zap/wrk/:rw",
-        "-t",
-        ZAP_IMAGE,
-        "zap-full-scan.py",
-        "-t",
-        target,
-        "-J",
-        "zap.json",
-        "-r",
-        ZAP_HTML_REPORT,
-        "-I",
-    ]
-    result = _run_command(command, cwd=Path(report_dir).resolve())
-    return _tool_result(
-        name="ZAP",
-        result=result,
-        report_path=report_path,
-        accepted_returncodes={0},
     )
