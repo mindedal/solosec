@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import cast
 
 from . import aggregate, config, tooling
-from ._models import CliOptions, ToolRunResult, ToolSelection
-from ._scanners import SCANNERS, ZAP
+from ._models import CliOptions, ResolvedConfig, ToolRunResult
+from ._scanners import SCANNERS, Scanner, rewrite_zap_target
 
 
 def _parse_args(argv: list[str] | None = None) -> CliOptions:
@@ -46,36 +46,30 @@ def _print_result(result: ToolRunResult) -> None:
     print(f"   -> Warning: {result.name} exited with status {result.returncode}.")
 
 
-def _run_zap_stage(
-    stage: str,
-    report_dir: Path,
-    *,
-    enabled: bool,
-    url: str,
-    runner: tooling.CommandRunner,
-) -> None:
-    """ZAP is not run like the others: it targets a URL through a container, or is skipped."""
-    if not (enabled and url):
-        print(f"{stage} Skipping {ZAP.label} (no URL provided or disabled).")
-        return
-
-    print(f"{stage} Running {ZAP.label}...")
-    target = tooling.rewrite_zap_target(url)
+def _announce_zap_target(url: str) -> None:
+    """A URL-targeting scanner runs in a container, where localhost is not the host."""
+    target = rewrite_zap_target(url)
     if target != url:
         print(
             "      (Detected localhost: switching to "
             "'host.docker.internal' for Docker compatibility)"
         )
         print(f"      Targeting: {target}")
-    _print_result(tooling.run_zap(report_dir, target, runner))
+
+
+def _skip_reason(scanner: Scanner, *, enabled: bool, url: str) -> str | None:
+    """Why this scanner will not run, or `None` if it will."""
+    if scanner.requires_url and not (enabled and url):
+        return "no URL provided or disabled"
+    if not scanner.requires_url and not enabled:
+        return f"disabled in {config.CONFIG_FILENAME}"
+    return None
 
 
 def _run_enabled_tools(
     project_root: Path,
     report_dir: Path,
-    tools: ToolSelection,
-    url: str,
-    exclude_dirs: list[str],
+    resolved: ResolvedConfig,
     runner: tooling.CommandRunner,
 ) -> None:
     total = len(SCANNERS)
@@ -83,17 +77,23 @@ def _run_enabled_tools(
     print()
     for step, scanner in enumerate(SCANNERS, start=1):
         stage = f"[{step}/{total}]"
-        if scanner is ZAP:
-            _run_zap_stage(
-                stage, report_dir, enabled=tools.is_enabled(ZAP.key), url=url, runner=runner
-            )
-        elif not tools.is_enabled(scanner.key):
-            print(f"{stage} Skipping {scanner.label} (disabled in {config.CONFIG_FILENAME}).")
-        else:
-            print(f"{stage} Running {scanner.label}...")
-            _print_result(
-                tooling.run_static_scanner(scanner, project_root, report_dir, exclude_dirs, runner)
-            )
+        enabled = scanner.key in resolved.enabled_tools
+        reason = _skip_reason(scanner, enabled=enabled, url=resolved.url)
+        if reason is not None:
+            print(f"{stage} Skipping {scanner.label} ({reason}).")
+            continue
+
+        print(f"{stage} Running {scanner.label}...")
+        if scanner.requires_url:
+            _announce_zap_target(resolved.url)
+        request = tooling.scan_request(
+            scanner,
+            project_root=project_root,
+            report_dir=report_dir,
+            exclude_dirs=resolved.exclude_dirs,
+            url=resolved.url,
+        )
+        _print_result(tooling.run_scanner(scanner, request, runner))
 
 
 def run_audit(options: CliOptions, *, runner: tooling.CommandRunner) -> int:
@@ -110,14 +110,7 @@ def run_audit(options: CliOptions, *, runner: tooling.CommandRunner) -> int:
     if resolved.url:
         print(f"   DAST URL: {resolved.url}")
 
-    _run_enabled_tools(
-        options.project_root,
-        report_dir,
-        resolved.tools,
-        resolved.url,
-        resolved.exclude_dirs,
-        runner,
-    )
+    _run_enabled_tools(options.project_root, report_dir, resolved, runner)
 
     print("\n[*] Generating Final Report...")
     verdict = aggregate.generate_report(report_dir=report_dir, output_file=output_file)

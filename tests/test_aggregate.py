@@ -87,7 +87,7 @@ def test_build_report_keeps_going_when_one_report_cannot_be_parsed(tmp_path: Pat
     assert [finding.tool for finding in findings] == ["Gitleaks"]
 
 
-def test_build_report_names_the_scanner_whose_report_could_not_be_parsed(
+def test_build_report_warns_about_a_report_it_could_not_parse(
     tmp_path: Path,
     capsys: CaptureFixture[str],
 ) -> None:
@@ -95,7 +95,7 @@ def test_build_report_names_the_scanner_whose_report_could_not_be_parsed(
 
     build_report(tmp_path)
 
-    assert "Warning: Could not parse Trivy report trivy.json:" in capsys.readouterr().out
+    assert "Warning: Could not parse trivy.json:" in capsys.readouterr().out
 
 
 def test_parse_zap_reports_unknown_file_without_an_instance_uri() -> None:

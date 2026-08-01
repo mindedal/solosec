@@ -2,21 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, TypedDict
+from typing import Final, Literal, TypedDict, cast, get_args
 
 Severity = Literal["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
 
-SEVERITIES: Final[tuple[Severity, ...]] = (
-    "CRITICAL",
-    "HIGH",
-    "MEDIUM",
-    "LOW",
-    "INFO",
-    "UNKNOWN",
-)
+# Derived from the Literal rather than repeated, so the two cannot drift apart.
+SEVERITIES: Final[tuple[Severity, ...]] = cast("tuple[Severity, ...]", get_args(Severity))
 DEFAULT_FAIL_ON_SEVERITIES: Final[tuple[Severity, ...]] = ("CRITICAL", "HIGH")
-
-ZAP_HTML_REPORT: Final[str] = "zap.html"
 
 
 class BaseFindingDict(TypedDict):
@@ -62,20 +54,11 @@ class Finding:
 
 
 @dataclass(slots=True, frozen=True)
-class ToolSelection:
-    """The scanner keys left enabled after `.warden.yaml` has been applied."""
-
-    enabled: frozenset[str]
-
-    def is_enabled(self, key: str) -> bool:
-        return key in self.enabled
-
-
-@dataclass(slots=True, frozen=True)
 class ResolvedConfig:
     url: str
     exclude_dirs: list[str]
-    tools: ToolSelection
+    enabled_tools: frozenset[str]
+    """The scanner keys left enabled after `.warden.yaml` has been applied."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -104,16 +87,3 @@ class ToolRunResult:
 class CommandResult:
     returncode: int | None
     warning: str | None = None
-
-
-@dataclass(slots=True, frozen=True)
-class Verdict:
-    """The build's pass/fail decision, and the tallies it was reached from."""
-
-    triggered_by: tuple[Severity, ...]
-    counts: SummaryCounts
-    breakdown: SummaryBreakdown
-
-    @property
-    def failed(self) -> bool:
-        return bool(self.triggered_by)

@@ -6,8 +6,8 @@ import textwrap
 from pathlib import Path
 from typing import cast
 
-from ._models import CliOptions, ResolvedConfig, ToolSelection
-from ._scanners import SCANNERS, ZAP
+from ._models import CliOptions, ResolvedConfig
+from ._scanners import SCANNERS
 
 ScalarValue = str | int | bool
 RawConfigValue = ScalarValue | list[str] | dict[str, ScalarValue]
@@ -149,12 +149,10 @@ def _tool_enabled(raw_value: ScalarValue | None) -> bool:
     return True
 
 
-def _extract_tool_selection(value: RawConfigValue | None) -> ToolSelection:
+def _extract_enabled_tools(value: RawConfigValue | None) -> frozenset[str]:
     overrides: dict[str, ScalarValue] = value if isinstance(value, dict) else {}
-    return ToolSelection(
-        enabled=frozenset(
-            scanner.key for scanner in SCANNERS if _tool_enabled(overrides.get(scanner.key))
-        )
+    return frozenset(
+        scanner.key for scanner in SCANNERS if _tool_enabled(overrides.get(scanner.key))
     )
 
 
@@ -183,12 +181,13 @@ def resolve_config(
 
     resolved_url = cli_url.strip() or _resolve_target_url(raw).strip()
     exclude_dirs = _extract_exclude_dirs(raw.get("exclude_dirs"))
-    tools = _extract_tool_selection(raw.get("tools"))
+    enabled_tools = _extract_enabled_tools(raw.get("tools"))
 
-    if not tools.is_enabled(ZAP.key):
+    # A URL is only meaningful while some scanner that targets one is still enabled.
+    if not any(scanner.requires_url and scanner.key in enabled_tools for scanner in SCANNERS):
         resolved_url = ""
 
-    return ResolvedConfig(url=resolved_url, exclude_dirs=exclude_dirs, tools=tools)
+    return ResolvedConfig(url=resolved_url, exclude_dirs=exclude_dirs, enabled_tools=enabled_tools)
 
 
 def _parse_args(argv: list[str] | None = None) -> CliOptions:
@@ -223,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
                 "url": resolved.url,
                 "exclude_dirs": resolved.exclude_dirs,
                 "tools": {
-                    scanner.key: resolved.tools.is_enabled(scanner.key) for scanner in SCANNERS
+                    scanner.key: scanner.key in resolved.enabled_tools for scanner in SCANNERS
                 },
             },
             ensure_ascii=False,

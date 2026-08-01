@@ -12,11 +12,10 @@ from ._models import (
     AggregateReportDict,
     Finding,
     FindingDict,
-    Verdict,
 )
 from ._parsers import severity_rank
 from ._scanners import SCANNERS, Scanner
-from ._summary import judge, print_summary
+from ._summary import Verdict, judge, print_summary
 
 
 def finding_to_dict(finding: Finding) -> FindingDict:
@@ -45,10 +44,7 @@ def _load_reports(report_dir: Path) -> list[tuple[Scanner, object | None]]:
     for scanner in SCANNERS:
         loaded = load_json(report_dir / scanner.report_file)
         if loaded.error is not None:
-            print(
-                f"Warning: Could not parse {scanner.label} report "
-                f"{scanner.report_file}: {loaded.error}"
-            )
+            print(f"Warning: Could not parse {scanner.report_file}: {loaded.error}")
         reports.append((scanner, loaded.data))
     return reports
 

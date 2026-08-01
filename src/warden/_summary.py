@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -15,13 +16,11 @@ from ._models import (
     Severity,
     SummaryBreakdown,
     SummaryCounts,
-    Verdict,
 )
 from ._parsers import normalize_severity
-from ._scanners import SCANNERS
+from ._scanners import CATEGORY_ORDER, SCANNERS
 
 TOOL_CATEGORIES: Final[dict[str, str]] = {scanner.label: scanner.category for scanner in SCANNERS}
-CATEGORY_ORDER: Final[list[str]] = ["Secrets", "Code", "Deps", "ZAP"]
 SUMMARY_ROWS: Final[tuple[tuple[str, Severity, str, bool], ...]] = (
     ("Critical", "CRITICAL", "red", True),
     ("High", "HIGH", "bright_red", True),
@@ -29,8 +28,21 @@ SUMMARY_ROWS: Final[tuple[tuple[str, Severity, str, bool], ...]] = (
 )
 
 
+@dataclass(slots=True, frozen=True)
+class Verdict:
+    """The build's pass/fail decision, and the tallies it was reached from."""
+
+    triggered_by: tuple[Severity, ...]
+    counts: SummaryCounts
+    breakdown: SummaryBreakdown
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.triggered_by)
+
+
 def _category_for_tool(tool: str) -> str:
-    return TOOL_CATEGORIES.get(tool, tool or "Other")
+    return TOOL_CATEGORIES.get(tool, tool)
 
 
 def judge(findings: Sequence[Finding]) -> Verdict:

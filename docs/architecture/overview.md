@@ -35,19 +35,21 @@ All under `src/warden/`.
 | --- | --- |
 | `cli.py` | Entry point. Parses arguments, sequences the stages, prints progress, returns the exit code. |
 | `config.py` | Parses `.warden.yaml` and resolves it against CLI arguments into a `ResolvedConfig`. Also the `warden-config` entry point. |
-| `tooling.py` | Prepares the report directory and builds and runs each scanner's command line. The only module that touches subprocesses. |
+| `tooling.py` | Prepares the report directory and runs a scanner's command line through a `CommandRunner`. The only module that touches subprocesses. |
 | `aggregate.py` | Assembles the report from the parsed findings and writes it. Also the `warden-aggregate` entry point. |
 | `_parsers.py` | Turns each tool's JSON into `Finding` records and normalises severities. |
 | `_summary.py` | Judges findings into a `Verdict` — counts, category breakdown, and whether the build fails — and prints the terminal table from one. |
 | `_json.py` | Type-narrowing helpers for walking untrusted JSON. A file it cannot parse comes back as an error, not a printed warning. |
-| `_scanners.py` | One `Scanner` record per tool Warden knows about, and the registry of them. |
+| `_scanners.py` | One `Scanner` record per tool Warden knows about, the registry of them, and the code that builds each one's command line. |
 | `_models.py` | Shared dataclasses, typed dicts, and constants. No logic. |
 
 The dependency direction is one-way: `cli` depends on `config`, `tooling`, and
 `aggregate`, which do not depend on each other. Every module that needs to know
 which scanners exist reads `_scanners`, which depends on `_parsers` because each
 record carries its tool's parser. `aggregate` depends on `_parsers` and
-`_summary`; those depend on `_json`. `_models` is a leaf.
+`_summary`; those depend on `_json`. `_models` is a leaf, and holds no behaviour
+— a record that needs a derived accessor lives with the code that uses it, which
+is why `Verdict` sits in `_summary.py` and `Scanner` in `_scanners.py`.
 
 `aggregate.py` and its three helper modules were one file until the parsing,
 rendering, and JSON-walking concerns had each grown large enough to change for
@@ -125,24 +127,38 @@ failure mode visible.
 ### One record per scanner
 
 Everything Warden knows about a scanner is one `Scanner` record in
-`_scanners.py`: its display label, its report filename, its summary category,
-its parser, and the exit codes it may return. The `.warden.yaml` key is derived
-from the label rather than stored alongside it, so the lowercase and capitalised
-forms of a tool name cannot drift apart. `SCANNERS` is those records in report
-order, and every list of tools in the codebase is a read of it — the files
-cleared before a run, the stages the CLI prints, the reports the aggregator
-parses, `tools_run`, the recognised config keys, the summary categories. Adding
-a scanner is adding a record, a parser, and the code that builds its command
-line.
+`_scanners.py`: its display label, its report filename, its summary category and
+where that category sorts, its parser, the function that builds its command
+line, the exit codes it may return, and whether it needs a target URL. The
+`.warden.yaml` key is derived from the label rather than stored alongside it, so
+the lowercase and capitalised forms of a tool name cannot drift apart; a label
+that would not survive lowercasing is rejected when the record is constructed.
+
+`SCANNERS` is those records in report order, and every list of tools in the
+codebase is a read of it — the files cleared before a run, the stages the CLI
+prints, the reports the aggregator parses, `tools_run`, the recognised config
+keys, the summary categories and their display order. Adding a scanner is
+adding a record and its parser and command builder; nothing else in the package
+enumerates tools.
+
+Display order in the summary breakdown is deliberately not report order
+(`Secrets, Code, Deps, ZAP` against `Trivy, Semgrep, Gitleaks, ZAP`), so each
+record carries a `summary_order` and `CATEGORY_ORDER` is derived by sorting on
+it, rather than being a second hand-written list that could fall out of step.
 
 ### Commands reach the operating system through a runner
 
-`tooling.py` does not reach for `subprocess` on its own account. Each `run_*`
-function takes a `CommandRunner`: a callable given the argument vector, working
+`tooling.py` does not reach for `subprocess` on its own account. `run_scanner`
+takes a `CommandRunner`: a callable given the argument vector, working
 directory, environment overrides, and stderr handling, which returns a
 `CommandResult`. `cli.py` passes the production adapter, `tooling.run_subprocess`;
 tests pass a fake that records what it was asked to run. The seam is what makes
 the ZAP invocation and its host-path resolution testable without Docker.
+
+Every scanner goes through that one function, ZAP included. `run_scanner` asks
+the record for its `Command` — argument vector, working directory, and how the
+process should be run — and hands it to the runner, so dispatch has no per-tool
+branch and no table of runners to keep in step with the registry.
 
 ### ZAP runs as a sibling container
 

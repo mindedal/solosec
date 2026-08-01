@@ -116,9 +116,13 @@ updating one, update both.
 
 - Public functions are typed; internal helpers are prefixed with `_`.
 - Data structures are frozen dataclasses or `TypedDict`s in `_models.py`, kept
-  free of logic; the `Scanner` record and its registry live in `_scanners.py`.
-- `tooling.py` is the only module that runs subprocesses. Keep scanner
-  invocation there.
+  free of logic. A record that needs a derived accessor lives beside the code
+  that uses it instead — `Scanner` in `_scanners.py`, `Verdict` in `_summary.py`.
+- `tooling.py` is the only module that runs subprocesses. A scanner's command
+  line is built by its `Scanner` record; `tooling.run_scanner` is what runs it.
+- Adding a scanner means adding a `Scanner` record, its parser, and its command
+  builder. If you find yourself editing a second list of tools, the registry
+  should have grown a field instead.
 - `from __future__ import annotations` at the top of every module.
 
 ## Documentation

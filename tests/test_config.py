@@ -119,7 +119,7 @@ def test_resolve_config_clears_url_when_zap_is_disabled(tmp_path: Path) -> None:
     resolved = resolve_config(project_root=tmp_path, cli_url="")
 
     assert resolved.url == ""
-    assert not resolved.tools.is_enabled(ZAP.key)
+    assert ZAP.key not in resolved.enabled_tools
 
 
 def test_resolve_config_drops_blank_exclude_dirs(tmp_path: Path) -> None:
@@ -153,10 +153,10 @@ def test_resolve_config_reads_the_off_switches_a_user_might_write(tmp_path: Path
 
     resolved = resolve_config(project_root=tmp_path, cli_url="")
 
-    assert not resolved.tools.is_enabled("trivy")
-    assert not resolved.tools.is_enabled("semgrep")
-    assert resolved.tools.is_enabled("gitleaks")
-    assert resolved.tools.is_enabled(ZAP.key)
+    assert "trivy" not in resolved.enabled_tools
+    assert "semgrep" not in resolved.enabled_tools
+    assert "gitleaks" in resolved.enabled_tools
+    assert ZAP.key in resolved.enabled_tools
 
 
 def test_resolve_config_falls_back_to_defaults_when_the_file_cannot_be_read(
@@ -167,7 +167,7 @@ def test_resolve_config_falls_back_to_defaults_when_the_file_cannot_be_read(
     resolved = resolve_config(project_root=tmp_path, cli_url="")
 
     assert resolved.url == ""
-    assert all(resolved.tools.is_enabled(scanner.key) for scanner in SCANNERS)
+    assert all(scanner.key in resolved.enabled_tools for scanner in SCANNERS)
 
 
 def test_config_main_reports_every_scanner_as_enabled_by_default(

@@ -48,7 +48,9 @@ include = [
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# `tests` is on the path so the shared fake in tests/fakes.py imports by name.
+# Pyright's extraPaths below must list the same roots.
+pythonpath = ["src", "tests"]
 testpaths = ["tests"]
 
 [tool.ruff]

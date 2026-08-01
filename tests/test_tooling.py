@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 from pytest import MonkeyPatch
 
 from fakes import RecordingRunner
 from warden import tooling
-from warden._models import ZAP_HTML_REPORT
+from warden._models import ToolRunResult
+from warden._scanners import (
+    GITLEAKS,
+    SCANNERS,
+    SEMGREP,
+    TRIVY,
+    ZAP,
+    ZAP_HTML_REPORT,
+    ZAP_IMAGE,
+    Scanner,
+    resolve_host_report_dir,
+)
 
 HOST_PATH_VARIABLES = ("WARDEN_HOST_REPORT_DIR", "WARDEN_HOST_WORKSPACE", "GITHUB_WORKSPACE")
 
@@ -17,10 +29,28 @@ def _forget_host_path_variables(monkeypatch: MonkeyPatch) -> None:
         monkeypatch.delenv(name, raising=False)
 
 
-def test_run_trivy_builds_its_command_line(tmp_path: Path) -> None:
+def _run(
+    scanner: Scanner,
+    tmp_path: Path,
+    runner: RecordingRunner,
+    *,
+    exclude_dirs: Sequence[str] = (),
+    url: str = "",
+) -> ToolRunResult:
+    request = tooling.scan_request(
+        scanner,
+        project_root=tmp_path,
+        report_dir=tmp_path,
+        exclude_dirs=exclude_dirs,
+        url=url,
+    )
+    return tooling.run_scanner(scanner, request, runner)
+
+
+def test_trivy_builds_its_command_line(tmp_path: Path) -> None:
     runner = RecordingRunner()
 
-    tooling.run_trivy(tmp_path, tmp_path, [], runner)
+    _run(TRIVY, tmp_path, runner)
 
     command = runner.commands[0]
     assert command.args == [
@@ -30,7 +60,7 @@ def test_run_trivy_builds_its_command_line(tmp_path: Path) -> None:
         "--format",
         "json",
         "--output",
-        str(tmp_path / "trivy.json"),
+        str(tmp_path.resolve() / "trivy.json"),
         "--quiet",
     ]
     assert command.cwd == tmp_path.resolve()
@@ -38,18 +68,18 @@ def test_run_trivy_builds_its_command_line(tmp_path: Path) -> None:
     assert command.env_overrides is None
 
 
-def test_run_trivy_joins_its_exclude_dirs_with_commas(tmp_path: Path) -> None:
+def test_trivy_joins_its_exclude_dirs_with_commas(tmp_path: Path) -> None:
     runner = RecordingRunner()
 
-    tooling.run_trivy(tmp_path, tmp_path, ["build", "node_modules"], runner)
+    _run(TRIVY, tmp_path, runner, exclude_dirs=["build", "node_modules"])
 
     assert runner.commands[0].args[-2:] == ["--skip-dirs", "build,node_modules"]
 
 
-def test_run_semgrep_builds_its_command_line(tmp_path: Path) -> None:
+def test_semgrep_builds_its_command_line(tmp_path: Path) -> None:
     runner = RecordingRunner()
 
-    tooling.run_semgrep(tmp_path, tmp_path, [], runner)
+    _run(SEMGREP, tmp_path, runner)
 
     command = runner.commands[0]
     assert command.args == [
@@ -58,7 +88,7 @@ def test_run_semgrep_builds_its_command_line(tmp_path: Path) -> None:
         "--config=auto",
         "--json",
         "--output",
-        str(tmp_path / "semgrep.json"),
+        str(tmp_path.resolve() / "semgrep.json"),
         "--quiet",
         ".",
     ]
@@ -67,10 +97,10 @@ def test_run_semgrep_builds_its_command_line(tmp_path: Path) -> None:
     assert command.env_overrides == {"PYTHONUTF8": "1"}
 
 
-def test_run_semgrep_repeats_its_exclude_flag_per_directory(tmp_path: Path) -> None:
+def test_semgrep_repeats_its_exclude_flag_per_directory(tmp_path: Path) -> None:
     runner = RecordingRunner()
 
-    tooling.run_semgrep(tmp_path, tmp_path, ["build", "", "node_modules"], runner)
+    _run(SEMGREP, tmp_path, runner, exclude_dirs=["build", "", "node_modules"])
 
     assert runner.commands[0].args[-4:] == [
         "--exclude",
@@ -80,10 +110,10 @@ def test_run_semgrep_repeats_its_exclude_flag_per_directory(tmp_path: Path) -> N
     ]
 
 
-def test_run_gitleaks_builds_its_command_line(tmp_path: Path) -> None:
+def test_gitleaks_builds_its_command_line(tmp_path: Path) -> None:
     runner = RecordingRunner()
 
-    tooling.run_gitleaks(tmp_path, tmp_path, [], runner)
+    _run(GITLEAKS, tmp_path, runner)
 
     command = runner.commands[0]
     assert command.args == [
@@ -93,7 +123,7 @@ def test_run_gitleaks_builds_its_command_line(tmp_path: Path) -> None:
         ".",
         "--no-git",
         "--report-path",
-        str(tmp_path / "gitleaks.json"),
+        str(tmp_path.resolve() / "gitleaks.json"),
         "--exit-code",
         "0",
     ]
@@ -102,10 +132,10 @@ def test_run_gitleaks_builds_its_command_line(tmp_path: Path) -> None:
     assert command.env_overrides is None
 
 
-def test_run_gitleaks_repeats_its_exclude_flag_per_directory(tmp_path: Path) -> None:
+def test_gitleaks_repeats_its_exclude_flag_per_directory(tmp_path: Path) -> None:
     runner = RecordingRunner()
 
-    tooling.run_gitleaks(tmp_path, tmp_path, ["build", "", "node_modules"], runner)
+    _run(GITLEAKS, tmp_path, runner, exclude_dirs=["build", "", "node_modules"])
 
     assert runner.commands[0].args[-4:] == [
         "--exclude-path",
@@ -118,19 +148,18 @@ def test_run_gitleaks_repeats_its_exclude_flag_per_directory(tmp_path: Path) -> 
 def test_an_empty_exclude_list_omits_the_exclude_flag(tmp_path: Path) -> None:
     runner = RecordingRunner()
 
-    tooling.run_trivy(tmp_path, tmp_path, [], runner)
-    tooling.run_semgrep(tmp_path, tmp_path, [], runner)
-    tooling.run_gitleaks(tmp_path, tmp_path, [], runner)
+    for scanner in (TRIVY, SEMGREP, GITLEAKS):
+        _run(scanner, tmp_path, runner)
 
     arguments = {argument for command in runner.commands for argument in command.args}
     assert not arguments & {"--skip-dirs", "--exclude", "--exclude-path"}
 
 
-def test_run_zap_builds_its_docker_command_line(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+def test_zap_builds_its_docker_command_line(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     _forget_host_path_variables(monkeypatch)
     runner = RecordingRunner()
 
-    tooling.run_zap(tmp_path, "http://localhost:3000", runner)
+    _run(ZAP, tmp_path, runner, url="http://localhost:3000")
 
     command = runner.commands[0]
     assert command.args == [
@@ -140,7 +169,7 @@ def test_run_zap_builds_its_docker_command_line(monkeypatch: MonkeyPatch, tmp_pa
         "-v",
         f"{tmp_path.resolve()}:/zap/wrk/:rw",
         "-t",
-        tooling.ZAP_IMAGE,
+        ZAP_IMAGE,
         "zap-full-scan.py",
         "-t",
         "http://host.docker.internal:3000",
@@ -153,14 +182,14 @@ def test_run_zap_builds_its_docker_command_line(monkeypatch: MonkeyPatch, tmp_pa
     assert command.cwd == tmp_path.resolve()
 
 
-def test_run_zap_mounts_the_host_report_dir_when_one_is_supplied(
+def test_zap_mounts_the_host_report_dir_when_one_is_supplied(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
     _forget_host_path_variables(monkeypatch)
     monkeypatch.setenv("WARDEN_HOST_WORKSPACE", "/host/workspace")
     runner = RecordingRunner()
 
-    tooling.run_zap(tmp_path, "http://example.test", runner)
+    _run(ZAP, tmp_path, runner, url="http://example.test")
 
     mount = Path("/host/workspace") / ".security_reports"
     assert runner.commands[0].args[4] == f"{mount}:/zap/wrk/:rw"
@@ -173,7 +202,7 @@ def test_resolve_host_report_dir_prefers_the_explicit_report_dir(
     monkeypatch.setenv("WARDEN_HOST_WORKSPACE", "/host/workspace")
     monkeypatch.setenv("GITHUB_WORKSPACE", "/github/workspace")
 
-    assert tooling.resolve_host_report_dir(tmp_path) == Path("/host/reports")
+    assert resolve_host_report_dir(tmp_path) == Path("/host/reports")
 
 
 def test_resolve_host_report_dir_falls_back_to_the_host_workspace(
@@ -184,7 +213,7 @@ def test_resolve_host_report_dir_falls_back_to_the_host_workspace(
     monkeypatch.setenv("GITHUB_WORKSPACE", "/github/workspace")
 
     expected = Path("/host/workspace") / ".security_reports"
-    assert tooling.resolve_host_report_dir(tmp_path) == expected
+    assert resolve_host_report_dir(tmp_path) == expected
 
 
 def test_resolve_host_report_dir_falls_back_to_the_github_workspace(
@@ -194,7 +223,7 @@ def test_resolve_host_report_dir_falls_back_to_the_github_workspace(
     monkeypatch.setenv("GITHUB_WORKSPACE", "/github/workspace")
 
     expected = Path("/github/workspace") / ".security_reports"
-    assert tooling.resolve_host_report_dir(tmp_path) == expected
+    assert resolve_host_report_dir(tmp_path) == expected
 
 
 def test_resolve_host_report_dir_falls_back_to_the_local_path(
@@ -202,7 +231,7 @@ def test_resolve_host_report_dir_falls_back_to_the_local_path(
 ) -> None:
     _forget_host_path_variables(monkeypatch)
 
-    assert tooling.resolve_host_report_dir(tmp_path) == tmp_path.resolve()
+    assert resolve_host_report_dir(tmp_path) == tmp_path.resolve()
 
 
 def test_run_subprocess_reports_the_exit_code_and_applies_env_overrides(tmp_path: Path) -> None:
@@ -227,7 +256,7 @@ def test_run_subprocess_warns_when_the_executable_is_missing(tmp_path: Path) -> 
 def test_a_scanner_that_is_missing_warns_instead_of_raising(tmp_path: Path) -> None:
     runner = RecordingRunner(returncode=None, warning="trivy was not found on PATH.")
 
-    result = tooling.run_trivy(tmp_path, tmp_path, [], runner)
+    result = _run(TRIVY, tmp_path, runner)
 
     assert not tooling.tool_succeeded(result)
     assert not tooling.report_written(result)
@@ -237,21 +266,21 @@ def test_a_scanner_that_is_missing_warns_instead_of_raising(tmp_path: Path) -> N
 def test_semgrep_accepts_a_run_that_found_something(tmp_path: Path) -> None:
     runner = RecordingRunner(returncode=1)
 
-    assert tooling.tool_succeeded(tooling.run_semgrep(tmp_path, tmp_path, [], runner))
+    assert tooling.tool_succeeded(_run(SEMGREP, tmp_path, runner))
 
 
 def test_the_other_scanners_accept_only_a_clean_exit(tmp_path: Path) -> None:
     runner = RecordingRunner(returncode=1)
 
-    assert not tooling.tool_succeeded(tooling.run_trivy(tmp_path, tmp_path, [], runner))
-    assert not tooling.tool_succeeded(tooling.run_gitleaks(tmp_path, tmp_path, [], runner))
-    assert not tooling.tool_succeeded(tooling.run_zap(tmp_path, "http://example.test", runner))
+    assert not tooling.tool_succeeded(_run(TRIVY, tmp_path, runner))
+    assert not tooling.tool_succeeded(_run(GITLEAKS, tmp_path, runner))
+    assert not tooling.tool_succeeded(_run(ZAP, tmp_path, runner, url="http://example.test"))
 
 
-def test_run_trivy_pretty_prints_its_report(tmp_path: Path) -> None:
+def test_a_report_is_pretty_printed_after_the_scanner_writes_it(tmp_path: Path) -> None:
     runner = RecordingRunner(report_text='{"Results":[]}')
 
-    result = tooling.run_trivy(tmp_path, tmp_path, [], runner)
+    result = _run(TRIVY, tmp_path, runner)
 
     assert tooling.tool_succeeded(result)
     assert (tmp_path / "trivy.json").read_text(encoding="utf-8") == '{\n  "Results": []\n}'
@@ -260,9 +289,20 @@ def test_run_trivy_pretty_prints_its_report(tmp_path: Path) -> None:
 def test_a_report_that_is_not_json_is_left_alone(tmp_path: Path) -> None:
     runner = RecordingRunner(report_text="not json")
 
-    tooling.run_trivy(tmp_path, tmp_path, [], runner)
+    _run(TRIVY, tmp_path, runner)
 
     assert (tmp_path / "trivy.json").read_text(encoding="utf-8") == "not json"
+
+
+def test_every_scanner_can_build_a_command_line(tmp_path: Path) -> None:
+    """The registry is the only place a scanner is declared, so every record must be runnable."""
+    runner = RecordingRunner()
+
+    for scanner in SCANNERS:
+        _run(scanner, tmp_path, runner, url="http://example.test")
+
+    assert len(runner.commands) == len(SCANNERS)
+    assert all(command.args for command in runner.commands)
 
 
 def test_prepare_report_dir_removes_previous_reports(tmp_path: Path) -> None:
