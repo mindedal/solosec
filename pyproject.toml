@@ -18,7 +18,7 @@ warden-config = "warden.config:main"
 warden-aggregate = "warden.aggregate:main"
 
 [dependency-groups]
-dev = ["pyright>=1.1.400,<2", "pytest>=9.0.3,<10", "pytest-cov>=6.1,<7", "ruff>=0.11.6,<0.12", "ty>=0.0.73,<0.1"]
+dev = ["pytest>=9.0.3,<10", "pytest-cov>=6.1,<7", "ruff>=0.11.6,<0.12", "ty>=0.0.73,<0.1"]
 
 [tool.uv]
 # Dependency cooldown: ignore distributions published in the last 7 days, so a
@@ -49,7 +49,7 @@ include = [
 
 [tool.pytest.ini_options]
 # `tests` is on the path so the shared fake in tests/fakes.py imports by name.
-# Pyright's extraPaths below must list the same roots.
+# ty's environment.root below must list the same roots.
 pythonpath = ["src", "tests"]
 testpaths = ["tests"]
 
@@ -66,14 +66,9 @@ docstring-code-format = true
 quote-style = "double"
 indent-style = "space"
 
+[tool.ty.environment]
+python-version = "3.11"
+root = ["src", "tests"]
+
 [tool.ty.rules]
 all = "error"
-
-[tool.pyright]
-pythonVersion = "3.11"
-typeCheckingMode = "strict"
-include = ["src", "tests"]
-extraPaths = ["src", "tests"]
-exclude = [".venv", "build", "dist", "**/node_modules", "**/__pycache__", "**/.*"]
-reportMissingTypeStubs = false
-reportUnnecessaryTypeIgnoreComment = true

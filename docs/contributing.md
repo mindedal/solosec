@@ -30,7 +30,7 @@ Four checks, each run by CI in this order. Run them locally before pushing:
 ```bash
 uv run ruff format --check .
 uv run ruff check .
-uv run pyright
+uv run ty check
 uv run pytest
 ```
 
@@ -46,12 +46,12 @@ uv run ruff format .
 | --- | --- | --- |
 | `ruff format` | `[tool.ruff.format]` | 100-character lines, double quotes, spaces. |
 | `ruff check` | `[tool.ruff.lint]` | Rule sets `B`, `E`, `F`, `I`, `UP`, `W`. Import sorting is included via `I`. |
-| `pyright` | `[tool.pyright]` | **Strict mode.** Targets Python 3.11 across `src` and `tests`. |
+| `ty check` | `[tool.ty.*]` | **All rules as errors.** Targets Python 3.11 across `src` and `tests`. |
 | `pytest` | `[tool.pytest.ini_options]` | Tests live in `tests/`, with `src` on the path. |
 
-Pyright runs in strict mode, so new code needs complete type annotations.
-`reportUnnecessaryTypeIgnoreComment` is on, meaning a `# type: ignore` that is
-no longer needed is itself an error.
+ty runs with every rule promoted to an error (`[tool.ty.rules] all = "error"`),
+so new code needs complete type annotations, and an ignore comment that is no
+longer needed is itself an error.
 
 ## Tests
 
